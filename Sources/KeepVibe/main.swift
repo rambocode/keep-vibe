@@ -10,7 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover?
     private let state = AppState()
     private let keepAwakeManager = KeepAwakeManager()
-    private var refreshTimer: Timer?
+    private var awakeRemainingTimer: Timer?
+    private var refreshTask: Task<Void, Never>?
+    private var refreshPending = false
     private var refreshGeneration: Int = 0
     private let popoverScreenMargin: CGFloat = 8
     private weak var popoverAnchorScreen: NSScreen?
@@ -69,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.state.launchAtLogin = LaunchAtLogin.isEnabled
                 },
                 onRefresh: { [weak self] in
-                    self?.refresh()
+                    self?.refresh(queueIfRunning: true)
                 },
                 onQuit: {
                     NSApp.terminate(nil)
@@ -86,14 +88,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 立即刷新一次
         refresh()
-
-        // 每 5 秒定时刷新（MainActor.assumeIsolated 消除 Swift 6 actor 隔离警告：
-        // Timer 在主 RunLoop 上触发，始终在主线程执行，断言安全）
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.refresh()
-            }
-        }
     }
 
     private func makeStatusBarIcon() -> NSImage? {
@@ -119,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             // 多屏：先激活 App，并按状态栏图标所在屏的可视区域限高。
             NSApp.activate(ignoringOtherApps: true)
+            refresh()
             let screen = button.window?.screen ?? NSScreen.main
             popoverAnchorScreen = screen
             if let visibleFrame = screen?.visibleFrame {
@@ -168,8 +163,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state.keepAwake = enabled
         if enabled {
             keepAwakeManager.start(mode: state.mode, duration: state.duration)
+            updateAwakeRemainingTimer()
         } else {
             keepAwakeManager.stop()
+            updateAwakeRemainingTimer()
         }
         // 立即更新剩余时间显示
         state.awakeRemaining = keepAwakeManager.remaining
@@ -177,23 +174,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Refresh
 
-    private func refresh() {
+    private func updateAwakeRemainingTimer() {
+        awakeRemainingTimer?.invalidate()
+        awakeRemainingTimer = nil
+
+        guard state.keepAwake, keepAwakeManager.remaining != nil else { return }
+
+        let timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let remaining = self.keepAwakeManager.remaining
+                self.state.awakeRemaining = remaining
+                if remaining == nil || remaining == 0 {
+                    self.updateAwakeRemainingTimer()
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        awakeRemainingTimer = timer
+    }
+
+    private func refresh(queueIfRunning: Bool = false) {
+        guard refreshTask == nil else {
+            if queueIfRunning {
+                refreshPending = true
+            }
+            return
+        }
+
         refreshGeneration += 1
         let generation = refreshGeneration
         let now = Date()
 
-        Task.detached(priority: .utility) {
+        refreshTask = Task.detached(priority: .utility) {
             let sys = SystemMonitor.sample()
-            let claude = ClaudeUsageParser.summarize(now: now)
-            let codex = CodexUsageParser.summarize(now: now)
+            let usage = UsageLogScanner.summarizeAll(now: now)
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                guard generation == self.refreshGeneration else { return }
-                self.state.system = sys
-                self.state.claude = claude
-                self.state.codex = codex
-                self.state.lastUpdated = Date()
-                self.state.awakeRemaining = self.keepAwakeManager.remaining
+                if generation == self.refreshGeneration {
+                    self.state.system = sys
+                    self.state.claude = usage.claude
+                    self.state.codex = usage.codex
+                    self.state.lastUpdated = Date()
+                    self.state.awakeRemaining = self.keepAwakeManager.remaining
+                }
+                self.refreshTask = nil
+                if self.refreshPending {
+                    self.refreshPending = false
+                    self.refresh()
+                }
             }
         }
     }
@@ -217,9 +246,10 @@ if CommandLine.arguments.contains("--dump") {
     print("=== 系统状态 ===")
     print("  开机时长: \(Int(sys.uptimeSeconds))s  CPU: \(String(format: "%.1f", sys.cpuPercent))%  内存: \(sys.memUsedBytes/1_048_576)/\(sys.memTotalBytes/1_048_576) MB  电池: \(sys.batteryPercent.map { "\($0)%" } ?? "无") 充电:\(sys.batteryCharging)")
     print("=== Claude Code ===")
-    print(fmt(ClaudeUsageParser.summarize(now: now)))
+    let usage = UsageLogScanner.summarizeAll(now: now)
+    print(fmt(usage.claude))
     print("=== Codex ===")
-    print(fmt(CodexUsageParser.summarize(now: now)))
+    print(fmt(usage.codex))
     exit(0)
 }
 
