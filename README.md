@@ -33,6 +33,39 @@ swift build -c release
 
 App 以菜单栏形式运行，不占用 Dock 位置（`NSApp.setActivationPolicy(.accessory)`）。
 
+## 常见问题：KeepVibe.app 已损坏
+
+如果启动提示“**KeepVibe.app 已损坏，无法打开。你应该将它移到废纸篓。**”，通常是 macOS 的 Gatekeeper 额外属性导致。
+
+可按下面步骤处理（请按你实际路径替换）：
+
+```bash
+# 1) 如果是 dmg 下载文件，先清理 dmg 的 quarantine 属性
+xattr -d com.apple.quarantine /path/to/KeepVibe-macos.dmg
+
+# 2) 挂载后，清理 .app 的 quarantine 属性（推荐）
+xattr -dr com.apple.quarantine /path/to/KeepVibe.app
+
+# 3) 如果你是从 zip 解压得到的，也可以先清理 zip 再解压
+xattr -d com.apple.quarantine /path/to/KeepVibe-macos.zip
+```
+
+处理后再执行：
+
+```bash
+open /path/to/KeepVibe.app
+```
+
+如果问题仍在，可先确认签名链路（仅用于本地自测验证）：
+
+```bash
+codesign --verify --deep --strict --verbose=4 /path/to/KeepVibe.app
+spctl --assess --type execute --verbose=4 /path/to/KeepVibe.app
+```
+
+清理后再次解压/挂载并打开即可。  
+另外建议优先下载带签名/公证的正式发布包（workflow 会在标签构建时对发布产物签名）。
+
 ## 功能点
 
 - 菜单栏图标点击展开弹窗（SwiftUI + NSPopover）
