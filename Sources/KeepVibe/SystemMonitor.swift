@@ -3,7 +3,14 @@ import Darwin
 import IOKit.ps
 
 // nonisolated(unsafe) 用于保存跨调用的 CPU tick 快照（Swift 6 全局变量需显式声明并发安全性）
-private nonisolated(unsafe) var previousCPUTicks: [processor_cpu_load_info_data_t] = []
+private struct CPUSnapshot {
+    let user: UInt64
+    let system: UInt64
+    let idle: UInt64
+    let nice: UInt64
+}
+
+private nonisolated(unsafe) var previousCPUTicks: CPUSnapshot?
 
 enum SystemMonitor {
 
@@ -33,77 +40,54 @@ enum SystemMonitor {
     // MARK: - CPU
 
     private static func sampleCPU() -> Double {
-        var cpuInfoArray: processor_info_array_t? = nil
-        var cpuInfoCount: mach_msg_type_number_t = 0
-        var processorCount: natural_t = 0
-
-        let kr = host_processor_info(
-            mach_host_self(),
-            PROCESSOR_CPU_LOAD_INFO,
-            &processorCount,
-            &cpuInfoArray,
-            &cpuInfoCount
+        var cpuLoad = host_cpu_load_info_data_t()
+        var loadCount = mach_msg_type_number_t(
+            MemoryLayout<host_cpu_load_info_data_t>.size / MemoryLayout<integer_t>.size
         )
 
-        guard kr == KERN_SUCCESS, let infoPtr = cpuInfoArray else { return 0 }
-
-        defer {
-            // 释放 Mach 分配的内存
-            let size = vm_size_t(cpuInfoCount) * vm_size_t(MemoryLayout<integer_t>.size)
-            let currentTask = mach_task_self_
-            vm_deallocate(currentTask, vm_address_t(bitPattern: infoPtr), size)
+        let kr: kern_return_t = withUnsafeMutablePointer(to: &cpuLoad) { ptr in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(loadCount)) { reboundPtr in
+                host_statistics(
+                    mach_host_self(),
+                    HOST_CPU_LOAD_INFO,
+                    reboundPtr,
+                    &loadCount
+                )
+            }
         }
 
-        // 将原始指针转换为结构体数组
-        let stride = Int(CPU_STATE_MAX)   // 每核 4 个状态：user/system/idle/nice
-        let count  = Int(processorCount)
+        guard kr == KERN_SUCCESS else { return 0 }
 
-        var current = [processor_cpu_load_info_data_t](repeating: processor_cpu_load_info_data_t(), count: count)
-        for i in 0 ..< count {
-            current[i].cpu_ticks.0 = UInt32(infoPtr[i * stride + Int(CPU_STATE_USER)])
-            current[i].cpu_ticks.1 = UInt32(infoPtr[i * stride + Int(CPU_STATE_SYSTEM)])
-            current[i].cpu_ticks.2 = UInt32(infoPtr[i * stride + Int(CPU_STATE_IDLE)])
-            current[i].cpu_ticks.3 = UInt32(infoPtr[i * stride + Int(CPU_STATE_NICE)])
-        }
+        let current = CPUSnapshot(
+            user: UInt64(cpuLoad.cpu_ticks.0),
+            system: UInt64(cpuLoad.cpu_ticks.1),
+            idle: UInt64(cpuLoad.cpu_ticks.2),
+            nice: UInt64(cpuLoad.cpu_ticks.3)
+        )
 
         let prev = previousCPUTicks
         previousCPUTicks = current
 
         // 首次调用：无历史快照，用当前瞬时数据近似（user+system / total）
-        guard prev.count == count else {
-            var user: Double = 0; var total: Double = 0
-            for c in current {
-                let u = Double(c.cpu_ticks.0)
-                let s = Double(c.cpu_ticks.1)
-                let i = Double(c.cpu_ticks.2)
-                let n = Double(c.cpu_ticks.3)
-                user  += u + s + n
-                total += u + s + i + n
-            }
-            return total > 0 ? (user / total) * 100 : 0
+        guard let p = prev else {
+            let active = Double(current.user) + Double(current.system) + Double(current.nice)
+            let total = Double(current.user) + Double(current.system) + Double(current.idle) + Double(current.nice)
+            if total == 0 { return 0.0 }
+            return (active / total) * 100
         }
 
-        // 正常：计算两次快照之间的差值
-        var deltaUser: Double = 0; var deltaTotal: Double = 0
-        for i in 0 ..< count {
-            let cu = Double(current[i].cpu_ticks.0)
-            let cs = Double(current[i].cpu_ticks.1)
-            let ci = Double(current[i].cpu_ticks.2)
-            let cn = Double(current[i].cpu_ticks.3)
+        let currentActive = Double(current.user) + Double(current.system) + Double(current.nice)
+        let prevActive = Double(p.user) + Double(p.system) + Double(p.nice)
+        let currentTotal =
+            Double(current.user) + Double(current.system) + Double(current.idle) + Double(current.nice)
+        let prevTotal =
+            Double(p.user) + Double(p.system) + Double(p.idle) + Double(p.nice)
 
-            let pu = Double(prev[i].cpu_ticks.0)
-            let ps = Double(prev[i].cpu_ticks.1)
-            let pi = Double(prev[i].cpu_ticks.2)
-            let pn = Double(prev[i].cpu_ticks.3)
-
-            let du = (cu - pu) + (cs - ps) + (cn - pn)  // 活跃 tick 差
-            let dt = du + (ci - pi)                       // 总 tick 差
-
-            deltaUser  += du
-            deltaTotal += dt
-        }
-
-        return deltaTotal > 0 ? max(0, min(100, (deltaUser / deltaTotal) * 100)) : 0
+        let deltaActive = currentActive - prevActive
+        let deltaTotal = currentTotal - prevTotal
+        if deltaTotal <= 0 { return 0.0 }
+        let value = (deltaActive / deltaTotal) * 100
+        return max(0.0, min(100.0, value))
     }
 
     // MARK: - Memory
