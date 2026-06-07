@@ -5,6 +5,10 @@ macOS 菜单栏工具，提供两大核心功能：
 1. **保持唤醒**：通过 IOKit 电源断言防止 Mac 休眠，支持标准模式（阻止系统空闲休眠）和合盖模式（接通电源时合盖不休眠），可设置永久或定时（1/2/4 小时）。
 2. **AI 用量统计**：扫描本地日志，统计 Claude Code（`~/.claude/projects/`）和 Codex（`~/.codex/sessions/`）的 token 用量与费用，按今日 / 本周 / 本月维度展示，并显示 Claude 的 5 小时滑动窗口进度。
 
+## 截图
+
+![KeepVibe 界面截图](assets/app.png)
+
 ## 构建
 
 ```bash
