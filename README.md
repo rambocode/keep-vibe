@@ -37,33 +37,29 @@ App 以菜单栏形式运行，不占用 Dock 位置（`NSApp.setActivationPolic
 
 如果启动提示“**KeepVibe.app 已损坏，无法打开。你应该将它移到废纸篓。**”，通常是 macOS 的 Gatekeeper 额外属性导致。
 
-可按下面步骤处理（请按你实际路径替换）：
+可按下面步骤处理（先以常见安装路径 `/Applications/KeepVibe.app` 为例）：
 
 ```bash
-# 1) 如果是 dmg 下载文件，先清理 dmg 的 quarantine 属性
-xattr -d com.apple.quarantine /path/to/KeepVibe-macos.dmg
-
 # 2) 挂载后，清理 .app 的 quarantine 属性（推荐）
-xattr -dr com.apple.quarantine /path/to/KeepVibe.app
-
-# 3) 如果你是从 zip 解压得到的，也可以先清理 zip 再解压
-xattr -d com.apple.quarantine /path/to/KeepVibe-macos.zip
+xattr -dr com.apple.quarantine /Applications/KeepVibe.app
 ```
 
 处理后再执行：
 
 ```bash
-open /path/to/KeepVibe.app
+open /Applications/KeepVibe.app
 ```
 
 如果问题仍在，可先确认签名链路（仅用于本地自测验证）：
 
 ```bash
-codesign --verify --deep --strict --verbose=4 /path/to/KeepVibe.app
-spctl --assess --type execute --verbose=4 /path/to/KeepVibe.app
+codesign --verify --deep --strict --verbose=4 /Applications/KeepVibe.app
+spctl --assess --type execute --verbose=4 /Applications/KeepVibe.app
 ```
 
-清理后再次解压/挂载并打开即可。  
+如果你是从 dmg/zip 下载并解压到其他目录，可把 `/Applications/KeepVibe.app` 替换为实际路径。
+
+清理后再次打开即可。  
 另外建议优先下载带签名/公证的正式发布包（workflow 会在标签构建时对发布产物签名）。
 
 ## 功能点
