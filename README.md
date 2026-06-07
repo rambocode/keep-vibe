@@ -11,6 +11,16 @@ macOS 菜单栏工具，提供两大核心功能：
 swift build -c release
 ```
 
+## 打包（本地）
+
+```bash
+./scripts/build-macos-app.sh
+```
+
+脚本会生成：
+- `dist/KeepVibe-macos.zip`
+- `dist/KeepVibe-macos.dmg`
+
 ## 运行
 
 ```bash
