@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let state = AppState()
     private let keepAwakeManager = KeepAwakeManager()
     private var refreshTimer: Timer?
+    private var refreshGeneration: Int = 0
     private let popoverScreenMargin: CGFloat = 8
     private weak var popoverAnchorScreen: NSScreen?
 
@@ -177,13 +178,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Refresh
 
     private func refresh() {
+        refreshGeneration += 1
+        let generation = refreshGeneration
         let now = Date()
+
         Task.detached(priority: .utility) {
             let sys = SystemMonitor.sample()
             let claude = ClaudeUsageParser.summarize(now: now)
             let codex = CodexUsageParser.summarize(now: now)
             await MainActor.run { [weak self] in
                 guard let self else { return }
+                guard generation == self.refreshGeneration else { return }
                 self.state.system = sys
                 self.state.claude = claude
                 self.state.codex = codex
