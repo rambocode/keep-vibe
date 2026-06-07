@@ -50,7 +50,8 @@ enum SystemMonitor {
         defer {
             // 释放 Mach 分配的内存
             let size = vm_size_t(cpuInfoCount) * vm_size_t(MemoryLayout<integer_t>.size)
-            vm_deallocate(mach_task_self_, vm_address_t(bitPattern: infoPtr), size)
+            let currentTask = mach_task_self_
+            vm_deallocate(currentTask, vm_address_t(bitPattern: infoPtr), size)
         }
 
         // 将原始指针转换为结构体数组
