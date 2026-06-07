@@ -15,6 +15,8 @@ else
   BUILD_DIR="$(swift build -c release --show-bin-path)"
 fi
 BINARY_PATH="${BUILD_DIR}/${APP_NAME}"
+APP_ICON="${ROOT_DIR}/Sources/KeepVibe/Resources/AppIcon.icns"
+APP_RESOURCES="${ROOT_DIR}/Sources/KeepVibe/Resources"
 WORK_DIR="${ROOT_DIR}/.build/macos-app"
 APP_BUNDLE="${WORK_DIR}/${APP_NAME}.app"
 DMG_ROOT="${WORK_DIR}/dmg-root"
@@ -34,6 +36,16 @@ mkdir -p "${APP_BUNDLE}/Contents/MacOS" "${APP_BUNDLE}/Contents/Resources"
 cp "${BINARY_PATH}" "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 chmod +x "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 
+find "${BUILD_DIR}" -maxdepth 1 -type d -name "*.resources" -exec cp -R {} "${APP_BUNDLE}/Contents/Resources/" \;
+
+if [[ -d "${APP_RESOURCES}" ]]; then
+  find "${APP_RESOURCES}" -maxdepth 1 -type f \( -name "*.png" -o -name "*.icns" \) -exec cp {} "${APP_BUNDLE}/Contents/Resources/" \;
+fi
+
+if [[ -f "${APP_ICON}" ]]; then
+  cp "${APP_ICON}" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
+fi
+
 cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -47,6 +59,8 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
     <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>
     <string>${APP_NAME}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleVersion</key>
     <string>${BUILD_NUMBER}</string>
     <key>CFBundleShortVersionString</key>

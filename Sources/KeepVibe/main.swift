@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 建 NSStatusItem
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "cup.and.saucer.fill", accessibilityDescription: "KeepVibe")
+            button.image = makeStatusBarIcon()
             button.action = #selector(togglePopover(_:))
             button.target = self
         }
@@ -93,6 +93,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.refresh()
             }
         }
+    }
+
+    private func makeStatusBarIcon() -> NSImage? {
+        let resourceURL = Bundle.main.url(forResource: "menubar-icon-white", withExtension: "png")
+            ?? Bundle.module.url(forResource: "menubar-icon-white", withExtension: "png")
+        guard let url = resourceURL,
+              let image = NSImage(contentsOf: url)
+        else {
+            return NSImage(systemSymbolName: "cup.and.saucer.fill", accessibilityDescription: "KeepVibe")
+        }
+        image.isTemplate = true
+        image.size = NSSize(width: 18, height: 18)
+        image.accessibilityDescription = "KeepVibe"
+        return image
     }
 
     // MARK: - Popover toggle

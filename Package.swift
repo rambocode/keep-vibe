@@ -9,7 +9,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "KeepVibe",
-            path: "Sources/KeepVibe"
+            path: "Sources/KeepVibe",
+            resources: [
+                .process("Resources")
+            ]
         )
     ]
 )
