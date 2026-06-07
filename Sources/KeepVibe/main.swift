@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let state = AppState()
     private let keepAwakeManager = KeepAwakeManager()
     private var refreshTimer: Timer?
+    private let popoverScreenMargin: CGFloat = 8
+    private weak var popoverAnchorScreen: NSScreen?
 
     // MARK: NSApplicationDelegate
 
@@ -74,6 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         )
         self.popover = popover
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePopoverWindowResize(_:)),
+            name: NSWindow.didResizeNotification,
+            object: nil
+        )
 
         // 立即刷新一次
         refresh()
@@ -94,15 +102,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
-            // 多屏：先激活 App，并按状态栏图标所在屏的可视高度限高，确保 popover 完整挂在菜单栏下方、顶部不溢出
+            // 多屏：先激活 App，并按状态栏图标所在屏的可视区域限高。
             NSApp.activate(ignoringOtherApps: true)
             let screen = button.window?.screen ?? NSScreen.main
-            if let visible = screen?.visibleFrame.height {
-                state.maxContentHeight = visible - 12   // 留出菜单栏箭头与边距
+            popoverAnchorScreen = screen
+            if let visibleFrame = screen?.visibleFrame {
+                state.maxContentHeight = max(320, visibleFrame.height - popoverScreenMargin * 8)
             }
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
+            keepPopoverInsideVisibleFrame(on: screen)
+            DispatchQueue.main.async { [weak self] in
+                self?.keepPopoverInsideVisibleFrame(on: screen)
+            }
         }
+    }
+
+    @objc private func handlePopoverWindowResize(_ notification: Notification) {
+        guard let resizedWindow = notification.object as? NSWindow,
+              resizedWindow === popover?.contentViewController?.view.window
+        else { return }
+        keepPopoverInsideVisibleFrame(on: popoverAnchorScreen)
+    }
+
+    private func keepPopoverInsideVisibleFrame(on screen: NSScreen?) {
+        guard let window = popover?.contentViewController?.view.window,
+              let visibleFrame = screen?.visibleFrame ?? window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        else { return }
+
+        var frame = window.frame
+        let maxHeight = max(320, visibleFrame.height - popoverScreenMargin * 2)
+        if frame.height > maxHeight {
+            frame.size.height = maxHeight
+        }
+
+        frame.origin.x = min(
+            max(frame.origin.x, visibleFrame.minX + popoverScreenMargin),
+            visibleFrame.maxX - frame.width - popoverScreenMargin
+        )
+        frame.origin.y = min(
+            max(frame.origin.y, visibleFrame.minY + popoverScreenMargin),
+            visibleFrame.maxY - frame.height - popoverScreenMargin
+        )
+        window.setFrame(frame, display: true)
     }
 
     // MARK: - Awake toggle
