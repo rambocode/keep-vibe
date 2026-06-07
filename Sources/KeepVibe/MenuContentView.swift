@@ -51,11 +51,13 @@ private func relativeTime(_ date: Date) -> String {
 // MARK: - Color Helpers
 
 private extension Color {
-    static let cardBackground = Color(nsColor: .controlBackgroundColor)
+    // 暖米白配色（照搬设计稿；popover 外观锁定 aqua 浅色）
+    static let windowBackground = Color(red: 0.98, green: 0.97, blue: 0.94)   // 窗口暖米白底（更浅）
+    static let cardBackground = Color(red: 0.94, green: 0.92, blue: 0.87)     // 卡片略深暖调，浮于窗口之上
     static let accentBlue = Color.blue
     static let accentOrange = Color.orange
     static let accentGreen = Color.green
-    static let textSecondary = Color.secondary
+    static let textSecondary = Color(red: 0.38, green: 0.36, blue: 0.32)      // 加深的暖灰，米白底上清晰可读
 }
 
 // MARK: - Section Card
@@ -113,19 +115,15 @@ private struct ProgressRow: View {
     let barColor: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .foregroundColor(iconColor)
-                    .frame(width: 14)
-                Text(label)
-                    .font(.caption)
-                    .foregroundColor(.textSecondary)
-                Spacer()
-                Text(value)
-                    .font(.caption)
-                    .monospacedDigit()
-            }
+        // 单行内联：图标 + 标签 + 弹性进度条 + 数值
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundColor(iconColor)
+                .frame(width: 14)
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.textSecondary)
+                .fixedSize()
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3)
@@ -137,6 +135,11 @@ private struct ProgressRow: View {
                 }
             }
             .frame(height: 4)
+            .frame(maxWidth: .infinity)
+            Text(value)
+                .font(.caption)
+                .monospacedDigit()
+                .fixedSize()
         }
     }
 }
@@ -224,10 +227,10 @@ private struct SystemStatsCard: View {
             ProgressRow(
                 label: "内存",
                 icon: "memorychip",
-                iconColor: .blue,
+                iconColor: .accentGreen,
                 value: stats.map { "\(formatBytes($0.memUsedBytes)) / \(formatBytes($0.memTotalBytes))" } ?? "—",
                 progress: memFraction,
-                barColor: .blue
+                barColor: .accentGreen
             )
 
             // Battery
@@ -275,17 +278,15 @@ private struct ClaudeUsageCard: View {
             Divider()
 
             if let u = usage {
-                // Today
-                HStack(alignment: .bottom) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("今日")
-                            .font(.caption2)
-                            .foregroundColor(.textSecondary)
-                        Text(formatTokens(u.todayTokens))
-                            .font(.title3)
-                            .fontWeight(.semibold)
-                            .monospacedDigit()
-                    }
+                // Today（单行：今日 + token + 金额）
+                HStack(spacing: 8) {
+                    Text("今日")
+                        .font(.caption)
+                        .foregroundColor(.textSecondary)
+                    Text(formatTokens(u.todayTokens))
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
                     Spacer()
                     Text(formatCost(u.todayCost))
                         .font(.subheadline)
@@ -340,20 +341,22 @@ private struct ClaudeUsageCard: View {
 
                 Divider()
 
-                // Week / Month
-                HStack {
+                // Week / Month（标签一行 + token金额同行）
+                HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("本周")
                             .font(.caption2)
                             .foregroundColor(.textSecondary)
-                        Text(formatTokens(u.weekTokens))
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .monospacedDigit()
-                        Text(formatCost(u.weekCost))
-                            .font(.caption2)
-                            .foregroundColor(.textSecondary)
-                            .monospacedDigit()
+                        HStack(spacing: 6) {
+                            Text(formatTokens(u.weekTokens))
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .monospacedDigit()
+                            Text(formatCost(u.weekCost))
+                                .font(.caption2)
+                                .foregroundColor(.textSecondary)
+                                .monospacedDigit()
+                        }
                     }
                     Spacer()
                     Divider().frame(height: 36)
@@ -362,14 +365,16 @@ private struct ClaudeUsageCard: View {
                         Text("本月")
                             .font(.caption2)
                             .foregroundColor(.textSecondary)
-                        Text(formatTokens(u.monthTokens))
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .monospacedDigit()
-                        Text(formatCost(u.monthCost))
-                            .font(.caption2)
-                            .foregroundColor(.textSecondary)
-                            .monospacedDigit()
+                        HStack(spacing: 6) {
+                            Text(formatTokens(u.monthTokens))
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .monospacedDigit()
+                            Text(formatCost(u.monthCost))
+                                .font(.caption2)
+                                .foregroundColor(.textSecondary)
+                                .monospacedDigit()
+                        }
                     }
                 }
 
@@ -415,17 +420,15 @@ private struct CodexUsageCard: View {
             Divider()
 
             if let u = usage {
-                // Today
-                HStack(alignment: .bottom) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("今日")
-                            .font(.caption2)
-                            .foregroundColor(.textSecondary)
-                        Text(formatTokens(u.todayTokens))
-                            .font(.title3)
-                            .fontWeight(.semibold)
-                            .monospacedDigit()
-                    }
+                // Today（单行：今日 + token + 金额）
+                HStack(spacing: 8) {
+                    Text("今日")
+                        .font(.caption)
+                        .foregroundColor(.textSecondary)
+                    Text(formatTokens(u.todayTokens))
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
                     Spacer()
                     Text(formatCost(u.todayCost, approx: u.costIsApprox))
                         .font(.subheadline)
@@ -435,20 +438,22 @@ private struct CodexUsageCard: View {
 
                 Divider()
 
-                // Week / Month
-                HStack {
+                // Week / Month（标签一行 + token金额同行）
+                HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("本周")
                             .font(.caption2)
                             .foregroundColor(.textSecondary)
-                        Text(formatTokens(u.weekTokens))
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .monospacedDigit()
-                        Text(formatCost(u.weekCost, approx: u.costIsApprox))
-                            .font(.caption2)
-                            .foregroundColor(.textSecondary)
-                            .monospacedDigit()
+                        HStack(spacing: 6) {
+                            Text(formatTokens(u.weekTokens))
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .monospacedDigit()
+                            Text(formatCost(u.weekCost, approx: u.costIsApprox))
+                                .font(.caption2)
+                                .foregroundColor(.textSecondary)
+                                .monospacedDigit()
+                        }
                     }
                     Spacer()
                     Divider().frame(height: 36)
@@ -457,14 +462,16 @@ private struct CodexUsageCard: View {
                         Text("本月")
                             .font(.caption2)
                             .foregroundColor(.textSecondary)
-                        Text(formatTokens(u.monthTokens))
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .monospacedDigit()
-                        Text(formatCost(u.monthCost, approx: u.costIsApprox))
-                            .font(.caption2)
-                            .foregroundColor(.textSecondary)
-                            .monospacedDigit()
+                        HStack(spacing: 6) {
+                            Text(formatTokens(u.monthTokens))
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .monospacedDigit()
+                            Text(formatCost(u.monthCost, approx: u.costIsApprox))
+                                .font(.caption2)
+                                .foregroundColor(.textSecondary)
+                                .monospacedDigit()
+                        }
                     }
                 }
 
@@ -502,7 +509,7 @@ private struct KeepAwakeCard: View {
             // Title row
             HStack(spacing: 8) {
                 Image(systemName: "cup.and.saucer.fill")
-                    .foregroundColor(.accentOrange)
+                    .foregroundColor(.primary)
                 Text("保持唤醒")
                     .font(.headline)
                     .fontWeight(.semibold)
@@ -516,78 +523,69 @@ private struct KeepAwakeCard: View {
                 .scaleEffect(0.85)
             }
 
-            if state.keepAwake {
-                Divider()
+            // Mode selector（始终显示，点击仅记偏好；高亮当前选择）
+            HStack(spacing: 4) {
+                ForEach(AwakeMode.allCases, id: \.self) { m in
+                    PillSegment(
+                        title: m == .standard ? "标准防睡" : "合盖也不睡",
+                        value: m,
+                        selected: Binding(
+                            get: { state.mode },
+                            set: { _ in }
+                        ),
+                        action: onSelectMode
+                    )
+                }
+            }
+            .padding(3)
+            .background(Color.secondary.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                // Mode selector
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("模式")
+            // Duration selector（始终显示）
+            HStack(spacing: 2) {
+                ForEach(AwakeDuration.allCases, id: \.self) { d in
+                    PillSegment(
+                        title: d.label,
+                        value: d,
+                        selected: Binding(
+                            get: { state.duration },
+                            set: { _ in }
+                        ),
+                        action: onSelectDuration
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(3)
+            .background(Color.secondary.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            // Countdown（仅定时防睡进行中显示）
+            if let remaining = state.awakeRemaining {
+                HStack(spacing: 4) {
+                    Image(systemName: "timer")
                         .font(.caption2)
                         .foregroundColor(.textSecondary)
-
-                    HStack(spacing: 4) {
-                        ForEach(AwakeMode.allCases, id: \.self) { m in
-                            PillSegment(
-                                title: m == .standard ? "标准防睡" : "合盖也不睡",
-                                value: m,
-                                selected: Binding(
-                                    get: { state.mode },
-                                    set: { _ in }
-                                ),
-                                action: onSelectMode
-                            )
-                        }
-                    }
-                    .padding(3)
-                    .background(Color.secondary.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-
-                // Duration selector
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("时长")
+                    Text("剩余 \(formatResetIn(remaining))")
                         .font(.caption2)
                         .foregroundColor(.textSecondary)
-
-                    HStack(spacing: 2) {
-                        ForEach(AwakeDuration.allCases, id: \.self) { d in
-                            PillSegment(
-                                title: d.label,
-                                value: d,
-                                selected: Binding(
-                                    get: { state.duration },
-                                    set: { _ in }
-                                ),
-                                action: onSelectDuration
-                            )
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .padding(3)
-                    .background(Color.secondary.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-
-                // Countdown
-                if let remaining = state.awakeRemaining {
-                    HStack(spacing: 4) {
-                        Image(systemName: "timer")
-                            .font(.caption2)
-                            .foregroundColor(.textSecondary)
-                        Text("剩余 \(formatResetIn(remaining))")
-                            .font(.caption2)
-                            .foregroundColor(.textSecondary)
-                            .monospacedDigit()
-                        Spacer()
-                    }
+                        .monospacedDigit()
+                    Spacer()
                 }
             }
         }
-        .opacity(state.keepAwake ? 1.0 : 0.85)
     }
 }
 
 // MARK: - Main View
+
+// 测量内容固有高度，用于把 popover 限制在屏幕高度内（放得下全显示，放不下才滚动）
+private struct ContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
 
 @MainActor
 struct MenuContentView: View {
@@ -599,8 +597,13 @@ struct MenuContentView: View {
     var onRefresh: () -> Void
     var onQuit: () -> Void
 
+    // 内容固有高度（自测量）；初值给一个常见估值，避免首帧闪烁
+    @State private var contentHeight: CGFloat = 560
+
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
+        // 屏幕可视高度上限（弹出时由 togglePopover 按状态栏图标所在屏更新）
+        let maxHeight = state.maxContentHeight
+        ScrollView(.vertical, showsIndicators: true) {
             VStack(spacing: 8) {
                 // Keep Awake
                 KeepAwakeCard(
@@ -619,65 +622,72 @@ struct MenuContentView: View {
                 // Codex
                 CodexUsageCard(usage: state.codex)
 
-                // Footer
-                SectionCard {
-                    // Launch at login
-                    HStack {
-                        Image(systemName: "arrow.up.circle")
-                            .foregroundColor(.secondary)
-                            .frame(width: 14)
-                        Text("开机自启")
-                            .font(.caption)
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { state.launchAtLogin },
-                            set: { onToggleLaunch($0) }
-                        ))
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .scaleEffect(0.8)
-                    }
+                // Footer（移出卡片，置于窗口背景之上）
+                Divider()
 
-                    Divider()
-
-                    // Refresh + timestamp + Quit
-                    HStack {
-                        Button(action: onRefresh) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.caption)
-                                if let updated = state.lastUpdated {
-                                    Text("更新于 \(relativeTime(updated))")
-                                        .font(.caption2)
-                                        .foregroundColor(.textSecondary)
-                                } else {
-                                    Text("刷新")
-                                        .font(.caption2)
-                                        .foregroundColor(.textSecondary)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
+                // Launch at login（居中）
+                HStack(spacing: 6) {
+                    Spacer()
+                    Image(systemName: "arrow.up.circle")
                         .foregroundColor(.secondary)
+                        .frame(width: 14)
+                    Text("开机自启")
+                        .font(.caption)
+                    Toggle("", isOn: Binding(
+                        get: { state.launchAtLogin },
+                        set: { onToggleLaunch($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .scaleEffect(0.8)
+                    Spacer()
+                }
 
-                        Spacer()
+                Divider()
 
-                        Button(action: onQuit) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "power")
-                                    .font(.caption)
-                                Text("退出")
+                // Refresh + timestamp + Quit
+                HStack {
+                    Button(action: onRefresh) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.caption)
+                            if let updated = state.lastUpdated {
+                                Text("更新于 \(relativeTime(updated))")
                                     .font(.caption2)
+                                    .foregroundColor(.textSecondary)
+                            } else {
+                                Text("刷新")
+                                    .font(.caption2)
+                                    .foregroundColor(.textSecondary)
                             }
                         }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.secondary)
                     }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+
+                    Spacer()
+
+                    Button(action: onQuit) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "power")
+                                .font(.caption)
+                            Text("退出")
+                                .font(.caption2)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
                 }
             }
             .padding(12)
+            .background(
+                GeometryReader { g in
+                    Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
+                }
+            )
         }
-        .frame(width: 320)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(width: 340, height: min(contentHeight, maxHeight))
+        .background(Color.windowBackground)
+        .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
     }
 }

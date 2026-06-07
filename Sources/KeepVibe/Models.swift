@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreGraphics
 
 enum AwakeMode: String, CaseIterable { case standard, clamshell }   // 标准防睡 / 合盖也不睡
 enum AwakeDuration: Hashable, CaseIterable {                          // 永久 / 1小时 / 2小时 / 4小时
@@ -48,4 +49,5 @@ final class AppState: ObservableObject {
     @Published var codex: AgentUsage? = nil
     @Published var lastUpdated: Date? = nil
     @Published var launchAtLogin: Bool = false
+    @Published var maxContentHeight: CGFloat = 600   // popover 限高：弹出时按状态栏图标所在屏更新
 }

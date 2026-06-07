@@ -36,6 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 建 NSPopover
         let popover = NSPopover()
         popover.behavior = .transient
+        // 锁定浅色外观：整个 popover（含材质背景）统一为 aqua，
+        // 避免系统深色模式下文字抗锯齿在错误背景上计算而发虚
+        popover.appearance = NSAppearance(named: .aqua)
         popover.contentViewController = NSHostingController(
             rootView: MenuContentView(
                 state: state,
@@ -91,7 +94,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
+            // 多屏：先激活 App，并按状态栏图标所在屏的可视高度限高，确保 popover 完整挂在菜单栏下方、顶部不溢出
+            NSApp.activate(ignoringOtherApps: true)
+            let screen = button.window?.screen ?? NSScreen.main
+            if let visible = screen?.visibleFrame.height {
+                state.maxContentHeight = visible - 12   // 留出菜单栏箭头与边距
+            }
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
         }
     }
 
