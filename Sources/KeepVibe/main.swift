@@ -1,5 +1,8 @@
 import Cocoa
 import SwiftUI
+import Combine
+import Carbon.HIToolbox
+import UserNotifications
 
 // MARK: - AppDelegate
 
@@ -10,12 +13,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover?
     private let state = AppState()
     private let keepAwakeManager = KeepAwakeManager()
+    private let sitReminder = SitReminder()
     private var awakeRemainingTimer: Timer?
     private var refreshTask: Task<Void, Never>?
     private var refreshPending = false
     private var refreshGeneration: Int = 0
-    private let popoverScreenMargin: CGFloat = 8
-    private weak var popoverAnchorScreen: NSScreen?
+
+    // 空闲提醒：监听 idleReminderMinutes，距上次 Claude 活动超阈值时发通知
+    private var idleReminderTimer: Timer?
+    private var idleReminderCancellable: AnyCancellable?
+    private var lastClaudeActivity: Date?
+    private var lastClaudeActivitySignature: Int?
+    private var idleReminderFired = false
+
+    private static let claudeStatusColor = NSColor(red: 0.92, green: 0.52, blue: 0.40, alpha: 1)
+    private static let codexStatusColor = NSColor(red: 0.42, green: 0.68, blue: 0.98, alpha: 1)
 
     // MARK: NSApplicationDelegate
 
@@ -32,19 +44,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 建 NSStatusItem
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = makeStatusBarIcon()
+            configureStatusBarButton(button)
             button.action = #selector(togglePopover(_:))
             button.target = self
         }
         statusItem = item
+        updateStatusTitle()
 
         // 建 NSPopover
         let popover = NSPopover()
         popover.behavior = .transient
-        // 锁定浅色外观：整个 popover（含材质背景）统一为 aqua，
-        // 避免系统深色模式下文字抗锯齿在错误背景上计算而发虚
-        popover.appearance = NSAppearance(named: .aqua)
-        popover.contentViewController = NSHostingController(
+        // 初始外观跟随用户偏好（默认跟随系统 = nil）
+        let savedThemeRaw = UserDefaults.standard.string(forKey: ThemePreference.storageKey) ?? ""
+        popover.appearance = (ThemePreference(rawValue: savedThemeRaw) ?? .system).nsAppearance
+        let host = NSHostingController(
             rootView: MenuContentView(
                 state: state,
                 onToggleAwake: { [weak self] enabled in
@@ -70,24 +83,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     LaunchAtLogin.set(enabled)
                     self.state.launchAtLogin = LaunchAtLogin.isEnabled
                 },
+                onSitReminderChanged: { [weak self] in
+                    self?.sitReminder.updateRunning()
+                },
+                onTestSitReminder: { [weak self] in
+                    self?.sitReminder.testPing()
+                },
                 onRefresh: { [weak self] in
                     self?.refresh(queueIfRunning: true)
                 },
                 onQuit: {
                     NSApp.terminate(nil)
+                },
+                onThemeChanged: { [weak self] pref in
+                    self?.popover?.appearance = pref.nsAppearance
                 }
             )
         )
+        host.sizingOptions = .preferredContentSize
+        popover.contentViewController = host
         self.popover = popover
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handlePopoverWindowResize(_:)),
-            name: NSWindow.didResizeNotification,
-            object: nil
-        )
+
+        // 配置空闲提醒（监听 idleReminderMinutes）
+        setupIdleReminder()
+        sitReminder.updateRunning()
 
         // 立即刷新一次
         refresh()
+    }
+
+    private func configureStatusBarButton(_ button: NSStatusBarButton) {
+        button.image = nil
+        button.attributedTitle = NSAttributedString()
+        button.isBordered = false
     }
 
     private func makeStatusBarIcon() -> NSImage? {
@@ -104,6 +132,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return image
     }
 
+    private func updateStatusTitle() {
+        guard let button = statusItem?.button else { return }
+
+        let title = NSMutableAttributedString()
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+
+        func appendSegment(value: String, color: NSColor) {
+            if title.length > 0 {
+                title.append(NSAttributedString(string: "  ", attributes: [.font: font]))
+            }
+
+            let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+            let image = NSImage(systemSymbolName: "hourglass", accessibilityDescription: nil)?
+                .withSymbolConfiguration(config)
+            image?.isTemplate = false
+
+            let attachment = NSTextAttachment()
+            attachment.image = image
+            title.append(NSAttributedString(attachment: attachment))
+            title.append(NSAttributedString(
+                string: " \(value)",
+                attributes: [
+                    .font: font,
+                    .baselineOffset: 1,
+                    .foregroundColor: color
+                ]
+            ))
+        }
+
+        if state.keepAwake {
+            let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [Self.claudeStatusColor]))
+            let image = NSImage(systemSymbolName: "cup.and.saucer.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(config)
+            image?.isTemplate = false
+
+            let attachment = NSTextAttachment()
+            attachment.image = image
+            title.append(NSAttributedString(attachment: attachment))
+        }
+
+        if let claudeWindow = state.claude?.window {
+            appendSegment(
+                value: String(format: "%.0f", (1 - claudeWindow.usedFraction) * 100),
+                color: Self.claudeStatusColor
+            )
+        }
+        if let codexWindow = state.codex?.window {
+            appendSegment(
+                value: String(format: "%.0f", (1 - codexWindow.usedFraction) * 100),
+                color: Self.codexStatusColor
+            )
+        }
+        if title.length == 0 {
+            appendSegment(value: "…", color: .secondaryLabelColor)
+        }
+
+        button.attributedTitle = title
+        button.image = nil
+    }
+
     // MARK: - Popover toggle
 
     @objc private func togglePopover(_ sender: Any?) {
@@ -111,50 +201,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
-            // 多屏：先激活 App，并按状态栏图标所在屏的可视区域限高。
-            NSApp.activate(ignoringOtherApps: true)
             refresh()
-            let screen = button.window?.screen ?? NSScreen.main
-            popoverAnchorScreen = screen
-            if let visibleFrame = screen?.visibleFrame {
-                state.maxContentHeight = max(320, visibleFrame.height - popoverScreenMargin * 8)
-            }
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
-            keepPopoverInsideVisibleFrame(on: screen)
-            DispatchQueue.main.async { [weak self] in
-                self?.keepPopoverInsideVisibleFrame(on: screen)
-            }
         }
-    }
-
-    @objc private func handlePopoverWindowResize(_ notification: Notification) {
-        guard let resizedWindow = notification.object as? NSWindow,
-              resizedWindow === popover?.contentViewController?.view.window
-        else { return }
-        keepPopoverInsideVisibleFrame(on: popoverAnchorScreen)
-    }
-
-    private func keepPopoverInsideVisibleFrame(on screen: NSScreen?) {
-        guard let window = popover?.contentViewController?.view.window,
-              let visibleFrame = screen?.visibleFrame ?? window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
-        else { return }
-
-        var frame = window.frame
-        let maxHeight = max(320, visibleFrame.height - popoverScreenMargin * 2)
-        if frame.height > maxHeight {
-            frame.size.height = maxHeight
-        }
-
-        frame.origin.x = min(
-            max(frame.origin.x, visibleFrame.minX + popoverScreenMargin),
-            visibleFrame.maxX - frame.width - popoverScreenMargin
-        )
-        frame.origin.y = min(
-            max(frame.origin.y, visibleFrame.minY + popoverScreenMargin),
-            visibleFrame.maxY - frame.height - popoverScreenMargin
-        )
-        window.setFrame(frame, display: true)
     }
 
     // MARK: - Awake toggle
@@ -170,6 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // 立即更新剩余时间显示
         state.awakeRemaining = keepAwakeManager.remaining
+        updateStatusTitle()
     }
 
     // MARK: - Refresh
@@ -206,26 +256,169 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let generation = refreshGeneration
         let now = Date()
 
-        refreshTask = Task.detached(priority: .utility) {
-            let sys = SystemMonitor.sample()
-            let usage = UsageLogScanner.summarizeAll(now: now)
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                if generation == self.refreshGeneration {
-                    self.state.system = sys
-                    self.state.claude = usage.claude
-                    self.state.codex = usage.codex
-                    self.state.lastUpdated = Date()
-                    self.state.awakeRemaining = self.keepAwakeManager.remaining
+        // 三路并行：系统监控 / 日志扫描 / Python 外部工具
+        refreshTask = Task {
+            async let sys  = Task.detached(priority: .utility) { SystemMonitor.sample() }.value
+            async let scan = Task.detached(priority: .utility) { UsageLogScanner.summarizeAll(now: now) }.value
+            async let ext  = ScriptRunner.loadAsync()
+
+            let s = await sys
+            let u = await scan
+            let e = await ext
+
+            if generation == refreshGeneration {
+                state.system    = s
+                state.claude    = u.claude
+                state.codex     = u.codex
+                state.dashboard = u.dashboard
+                state.lastUpdated   = Date()
+                state.awakeRemaining = keepAwakeManager.remaining
+                noteClaudeActivity(from: u.claude)
+                // 周配额进度条（Python 脚本提供）
+                if let q = e?.claude, let q7 = q.q7 {
+                    let at = q.q7_reset.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                    state.claude?.weekQuota = QuotaStat(usedFraction: q7 / 100.0, resetAt: at)
                 }
-                self.refreshTask = nil
-                if self.refreshPending {
-                    self.refreshPending = false
-                    self.refresh()
+                if let q = e?.codex, let pw = q.pw {
+                    let at = q.rw.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                    state.codex?.weekQuota = QuotaStat(usedFraction: pw / 100.0, resetAt: at)
                 }
+                if let q = e?.codex, let p5 = q.p5 {
+                    let resetIn = q.r5.map { max(0, Date(timeIntervalSince1970: TimeInterval($0)).timeIntervalSinceNow) }
+                    state.codex?.window = WindowStat(
+                        tokens: state.codex?.window?.tokens ?? 0,
+                        tokensPerMin: state.codex?.window?.tokensPerMin ?? 0,
+                        resetIn: resetIn,
+                        usedFraction: min(max(p5 / 100.0, 0), 1)
+                    )
+                }
+                state.gemini   = e?.gemini.map   { toolStatToAgentUsage($0) }
+                state.grok     = e?.grok.map     { toolStatToAgentUsage($0) }
+                state.aider    = e?.aider.map    { toolStatToAgentUsage($0) }
+                state.openclaw = e?.openclaw.map { toolStatToAgentUsage($0) }
+                state.opencode = e?.opencode.map { toolStatToAgentUsage($0) }
+                state.qoder    = e?.qoder.map    { toolStatToAgentUsage($0) }
+                updateStatusTitle()
+            }
+            refreshTask = nil
+            if refreshPending {
+                refreshPending = false
+                refresh()
             }
         }
     }
+
+    // MARK: - 空闲提醒（idle reminder）
+
+    /// 在启动时调用：监听 state.idleReminderMinutes 变化，按需启停空闲提醒定时器。
+    private func setupIdleReminder() {
+        // UNUserNotificationCenter 要求正规 App Bundle；swift run 时跳过
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        UNUserNotificationCenter.current()
+            .requestAuthorization(options: [.alert, .sound]) { _, _ in }
+
+        idleReminderCancellable = state.$idleReminderMinutes
+            .removeDuplicates()
+            .sink { [weak self] minutes in
+                self?.reconfigureIdleReminder(minutes: minutes)
+            }
+        reconfigureIdleReminder(minutes: state.idleReminderMinutes)
+    }
+
+    /// 根据当前阈值（分钟）启停定时器。<= 0 表示禁用。
+    private func reconfigureIdleReminder(minutes: Int) {
+        idleReminderTimer?.invalidate()
+        idleReminderTimer = nil
+        idleReminderFired = false
+
+        guard minutes > 0 else { return }
+
+        // 每 30 秒检查一次是否超过空闲阈值
+        let timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.checkIdleReminder()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        idleReminderTimer = timer
+    }
+
+    /// 检查距上次 Claude 活动是否超过阈值，超过则发一次通知（直到下次有活动才会再次提醒）。
+    private func checkIdleReminder() {
+        let minutes = state.idleReminderMinutes
+        guard minutes > 0, let last = lastClaudeActivity else { return }
+
+        let idleSeconds = Date().timeIntervalSince(last)
+        let threshold = TimeInterval(minutes * 60)
+
+        if idleSeconds >= threshold {
+            if !idleReminderFired {
+                idleReminderFired = true
+                sendIdleNotification(minutes: minutes)
+            }
+        } else {
+            idleReminderFired = false
+        }
+    }
+
+    /// 依据最新 Claude 用量推断是否“刚有活动”，若发生变化则刷新最近活动时间。
+    private func noteClaudeActivity(from claude: AgentUsage?) {
+        guard let claude else { return }
+        // 用关键字段构造签名：tokens / 活跃会话 / 窗口 tokens 任一变化都视为有新活动
+        let signature = claude.todayTokens
+            ^ (claude.activeSessions << 20)
+            ^ ((claude.window?.tokens ?? 0) << 4)
+
+        if lastClaudeActivitySignature == nil {
+            // 首次记录：以当前时间作为基线，不立即视为“刚活动”
+            lastClaudeActivitySignature = signature
+            lastClaudeActivity = Date()
+            return
+        }
+
+        if signature != lastClaudeActivitySignature {
+            lastClaudeActivitySignature = signature
+            lastClaudeActivity = Date()
+            idleReminderFired = false
+        }
+    }
+
+    /// 发送一条空闲提醒通知。
+    private func sendIdleNotification(minutes: Int) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "KeepVibe"
+        content.body = "Claude 已空闲超过 \(minutes) 分钟，记得保持节奏 ✨"
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: "keepvibe.idle.reminder",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request) { _ in }
+    }
+}
+
+// MARK: - 外部工具用量转换
+
+/// 将 Python 采集的 ExternalToolStat 映射为统一的 AgentUsage。
+private func toolStatToAgentUsage(_ stat: ExternalToolStat) -> AgentUsage {
+    var u = AgentUsage()
+    u.todayTokens  = (stat.today?.inputTokens ?? 0) + (stat.today?.outputTokens ?? 0)
+    u.todayCost    = stat.today?.cost ?? 0
+    u.todayBreakdown = TokenBreakdown(input: stat.today?.inputTokens ?? 0, output: stat.today?.outputTokens ?? 0)
+    u.weekTokens   = (stat.week?.inputTokens ?? 0) + (stat.week?.outputTokens ?? 0)
+    u.weekCost     = stat.week?.cost ?? 0
+    u.weekBreakdown = TokenBreakdown(input: stat.week?.inputTokens ?? 0, output: stat.week?.outputTokens ?? 0)
+    u.monthTokens  = (stat.month?.inputTokens ?? 0) + (stat.month?.outputTokens ?? 0)
+    u.monthCost    = stat.month?.cost ?? 0
+    u.monthBreakdown = TokenBreakdown(input: stat.month?.inputTokens ?? 0, output: stat.month?.outputTokens ?? 0)
+    u.yearTokens   = (stat.year?.inputTokens ?? 0) + (stat.year?.outputTokens ?? 0)
+    u.yearCost     = stat.year?.cost ?? 0
+    u.yearBreakdown = TokenBreakdown(input: stat.year?.inputTokens ?? 0, output: stat.year?.outputTokens ?? 0)
+    u.activeSessions = stat.today?.sessions ?? 0
+    return u
 }
 
 // MARK: - Debug dump (核对数据用：KeepVibe --dump)
@@ -254,6 +447,17 @@ if CommandLine.arguments.contains("--dump") {
 }
 
 // MARK: - Entry point
+
+private func configureMenuBarProcessForDebugRuns() {
+    let lsuiElement = Bundle.main.object(forInfoDictionaryKey: "LSUIElement") as? Bool ?? false
+    guard !lsuiElement else { return }
+
+    // swift run 启动时没有 .app/Info.plist，需在创建 NSApplication 前标记为 UIElement。
+    var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: UInt32(kCurrentProcess))
+    _ = TransformProcessType(&psn, UInt32(kProcessTransformToUIElementApplication))
+}
+
+configureMenuBarProcessForDebugRuns()
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

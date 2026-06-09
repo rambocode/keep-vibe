@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 struct UsageLogRoots {
     var claudeProjects: URL
@@ -19,10 +20,11 @@ struct UsageLogRoots {
 }
 
 enum UsageLogScanner {
-    private static let cacheVersion = 1
-    private static let retentionDays = 35
+    private static let cacheVersion = 3   // 升到 3：ClaudeEvent 加 model；ClaudeFileCache 加 cwd
+    private static let retentionDays = 366
 
-    static func summarizeAll(now: Date, roots: UsageLogRoots = .default) -> (claude: AgentUsage, codex: AgentUsage) {
+    static func summarizeAll(now: Date, roots: UsageLogRoots = .default)
+        -> (claude: AgentUsage, codex: AgentUsage, dashboard: DashboardData) {
         let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86_400)
         var cache = loadCache(from: roots.cacheFile)
         let claudeScan = scanClaude(root: roots.claudeProjects, files: cache.claude, cutoff: cutoff)
@@ -35,7 +37,8 @@ enum UsageLogScanner {
 
         return (
             summarizeClaude(files: cache.claude, now: now, cutoff: cutoff),
-            summarizeCodex(files: cache.codex, now: now, cutoff: cutoff)
+            summarizeCodex(files: cache.codex, now: now, cutoff: cutoff),
+            buildDashboard(claudeFiles: cache.claude, codexFiles: cache.codex, now: now)
         )
     }
 
@@ -75,6 +78,7 @@ private struct ClaudeFileCache: Codable {
     var mtime: TimeInterval
     var offset: UInt64
     var events: [ClaudeEvent]
+    var cwd: String?          // 从 JSONL user 消息提取的项目目录
 }
 
 private struct CodexFileCache: Codable {
@@ -86,16 +90,26 @@ private struct CodexFileCache: Codable {
 
 private struct ClaudeEvent: Codable {
     var timestamp: TimeInterval
-    var tokens: Int
+    var inputTokens: Int
+    var outputTokens: Int
+    var cacheWriteTokens: Int
+    var cacheReadTokens: Int
     var cost: Double
     var sessionId: String?
     var dedupeKey: String
+    var model: String         // 模型 id，如 "claude-opus-4-7"
+    var tokens: Int { inputTokens + outputTokens + cacheWriteTokens + cacheReadTokens }
 }
 
 private struct CodexEvent: Codable {
     var timestamp: TimeInterval
-    var tokens: Int
+    var inputTokens: Int
+    var cachedTokens: Int   // cached_input：是 inputTokens 的子集，不可再次相加
+    var outputTokens: Int
+    var reasoningTokens: Int
     var cost: Double
+    // 对齐 last_token_usage.total_tokens = input + output（cached 已含于 input、reasoning 不计入）
+    var tokens: Int { inputTokens + outputTokens }
 }
 
 private struct FileSnapshot {
@@ -167,12 +181,25 @@ private extension UsageLogScanner {
                 return true
             }
 
+            // 提取 cwd（优先复用已缓存值；新文件从头扫第一个 user 消息）
+            var cwd: String? = shouldAppend ? cached?.cwd : nil
+            if cwd == nil {
+                _ = readJSONLines(from: URL(fileURLWithPath: path), offset: 0) { data in
+                    guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let type = obj["type"] as? String, type == "user",
+                          let c = obj["cwd"] as? String, !c.isEmpty else { return true }
+                    cwd = c
+                    return false  // 找到即停止
+                }
+            }
+
             let retained = events.filter { Date(timeIntervalSince1970: $0.timestamp) >= cutoff }
             next[path] = ClaudeFileCache(
                 size: snapshot.size,
                 mtime: snapshot.mtime,
                 offset: offset,
-                events: retained
+                events: retained,
+                cwd: cwd
             )
         }
 
@@ -335,11 +362,10 @@ private final class ClaudeLineParser {
             return ParsedClaudeLine(date: .distantPast, cached: ignoredClaudeEvent)
         }
 
-        let inputTokens = usage["input_tokens"] as? Int ?? 0
-        let outputTokens = usage["output_tokens"] as? Int ?? 0
+        let inputTokens   = usage["input_tokens"] as? Int ?? 0
+        let outputTokens  = usage["output_tokens"] as? Int ?? 0
         let cacheCreation = usage["cache_creation_input_tokens"] as? Int ?? 0
-        let cacheReadTok = usage["cache_read_input_tokens"] as? Int ?? 0
-        let totalTokens = inputTokens + outputTokens + cacheCreation + cacheReadTok
+        let cacheReadTok  = usage["cache_read_input_tokens"] as? Int ?? 0
         let model = message["model"] as? String ?? ""
         let cost = Pricing.claudeCost(
             model: model,
@@ -353,16 +379,22 @@ private final class ClaudeLineParser {
             date: ts,
             cached: ClaudeEvent(
                 timestamp: ts.timeIntervalSince1970,
-                tokens: totalTokens,
+                inputTokens: inputTokens,
+                outputTokens: outputTokens,
+                cacheWriteTokens: cacheCreation,
+                cacheReadTokens: cacheReadTok,
                 cost: cost,
                 sessionId: obj["sessionId"] as? String,
-                dedupeKey: dedupeKey
+                dedupeKey: dedupeKey,
+                model: model
             )
         )
     }
 
     private var ignoredClaudeEvent: ClaudeEvent {
-        ClaudeEvent(timestamp: 0, tokens: 0, cost: 0, sessionId: nil, dedupeKey: "")
+        ClaudeEvent(timestamp: 0, inputTokens: 0, outputTokens: 0,
+                    cacheWriteTokens: 0, cacheReadTokens: 0,
+                    cost: 0, sessionId: nil, dedupeKey: "", model: "")
     }
 }
 
@@ -400,11 +432,10 @@ private final class CodexLineParser {
             return ParsedCodexLine(date: .distantPast, cached: ignoredCodexEvent)
         }
 
-        let inputTokens = usage["input_tokens"] as? Int ?? 0
-        let cachedInput = usage["cached_input_tokens"] as? Int ?? 0
+        let inputTokens  = usage["input_tokens"] as? Int ?? 0
+        let cachedInput  = usage["cached_input_tokens"] as? Int ?? 0
         let outputTokens = usage["output_tokens"] as? Int ?? 0
         let reasoningOut = usage["reasoning_output_tokens"] as? Int ?? 0
-        let totalTokens = usage["total_tokens"] as? Int ?? 0
         let cost = Pricing.codexCost(
             input: inputTokens,
             cachedInput: cachedInput,
@@ -413,12 +444,20 @@ private final class CodexLineParser {
 
         return ParsedCodexLine(
             date: ts,
-            cached: CodexEvent(timestamp: ts.timeIntervalSince1970, tokens: totalTokens, cost: cost)
+            cached: CodexEvent(
+                timestamp: ts.timeIntervalSince1970,
+                inputTokens: inputTokens,
+                cachedTokens: cachedInput,
+                outputTokens: outputTokens,
+                reasoningTokens: reasoningOut,
+                cost: cost
+            )
         )
     }
 
     private var ignoredCodexEvent: CodexEvent {
-        CodexEvent(timestamp: 0, tokens: 0, cost: 0)
+        CodexEvent(timestamp: 0, inputTokens: 0, cachedTokens: 0,
+                   outputTokens: 0, reasoningTokens: 0, cost: 0)
     }
 }
 
@@ -429,9 +468,9 @@ private extension UsageLogScanner {
         let bounds = timeBounds(now: now)
         let fiveMinAgo = now.addingTimeInterval(-5 * 60)
         var seenIds = Set<String>()
-        var todayTokens = 0; var todayCost = 0.0
-        var weekTokens = 0; var weekCost = 0.0
-        var monthTokens = 0; var monthCost = 0.0
+        var todayCost = 0.0, weekCost = 0.0, monthCost = 0.0, yearCost = 0.0
+        var today = TokenBreakdown(), week = TokenBreakdown(),
+            month = TokenBreakdown(), year = TokenBreakdown()
         var sessionLastSeen = [String: Date]()
         var windowTimestamps = [Date]()
         var windowTokens = [Int]()
@@ -444,9 +483,34 @@ private extension UsageLogScanner {
             let ts = Date(timeIntervalSince1970: event.timestamp)
             guard ts >= cutoff else { continue }
 
-            if ts >= bounds.month { monthTokens += event.tokens; monthCost += event.cost }
-            if ts >= bounds.week { weekTokens += event.tokens; weekCost += event.cost }
-            if ts >= bounds.day { todayTokens += event.tokens; todayCost += event.cost }
+            if ts >= bounds.year {
+                year.input      += event.inputTokens
+                year.output     += event.outputTokens
+                year.cacheWrite += event.cacheWriteTokens
+                year.cacheRead  += event.cacheReadTokens
+                yearCost += event.cost
+            }
+            if ts >= bounds.month {
+                month.input      += event.inputTokens
+                month.output     += event.outputTokens
+                month.cacheWrite += event.cacheWriteTokens
+                month.cacheRead  += event.cacheReadTokens
+                monthCost += event.cost
+            }
+            if ts >= bounds.week {
+                week.input      += event.inputTokens
+                week.output     += event.outputTokens
+                week.cacheWrite += event.cacheWriteTokens
+                week.cacheRead  += event.cacheReadTokens
+                weekCost += event.cost
+            }
+            if ts >= bounds.day {
+                today.input      += event.inputTokens
+                today.output     += event.outputTokens
+                today.cacheWrite += event.cacheWriteTokens
+                today.cacheRead  += event.cacheReadTokens
+                todayCost += event.cost
+            }
 
             windowTimestamps.append(ts)
             windowTokens.append(event.tokens)
@@ -458,25 +522,24 @@ private extension UsageLogScanner {
             }
         }
 
-        return AgentUsage(
-            todayTokens: todayTokens,
-            todayCost: todayCost,
-            weekTokens: weekTokens,
-            weekCost: weekCost,
-            monthTokens: monthTokens,
-            monthCost: monthCost,
-            window: computeWindow(timestamps: windowTimestamps, tokens: windowTokens, now: now),
-            activeSessions: sessionLastSeen.values.filter { $0 >= fiveMinAgo }.count,
-            costIsApprox: false
-        )
+        var u = AgentUsage()
+        u.todayTokens = today.total;  u.todayCost = todayCost;  u.todayBreakdown = today
+        u.weekTokens  = week.total;   u.weekCost  = weekCost;   u.weekBreakdown  = week
+        u.monthTokens = month.total;  u.monthCost = monthCost;  u.monthBreakdown = month
+        u.yearTokens  = year.total;   u.yearCost  = yearCost;   u.yearBreakdown  = year
+        u.window = computeWindow(timestamps: windowTimestamps, tokens: windowTokens, now: now)
+        u.activeSessions = sessionLastSeen.values.filter { $0 >= fiveMinAgo }.count
+        u.costIsApprox = false
+        return u
     }
 
     static func summarizeCodex(files: [String: CodexFileCache], now: Date, cutoff: Date) -> AgentUsage {
         let bounds = timeBounds(now: now)
         let activeWindow = now.addingTimeInterval(-5 * 60)
-        var todayTokens = 0; var todayCost = 0.0
-        var weekTokens = 0; var weekCost = 0.0
-        var monthTokens = 0; var monthCost = 0.0
+        var todayCost = 0.0, weekCost = 0.0, monthCost = 0.0, yearCost = 0.0
+        // Codex 口径：total=input+output（cached_input 是 input 子集、reasoning 不计入 total_tokens）
+        var today = TokenBreakdown(isCodex: true), week = TokenBreakdown(isCodex: true),
+            month = TokenBreakdown(isCodex: true), year = TokenBreakdown(isCodex: true)
         var activeSessions = 0
 
         for file in files.values {
@@ -485,17 +548,33 @@ private extension UsageLogScanner {
                 let ts = Date(timeIntervalSince1970: event.timestamp)
                 guard ts >= cutoff else { continue }
 
-                if ts >= bounds.day {
-                    todayTokens += event.tokens
-                    todayCost += event.cost
-                }
-                if ts >= bounds.week {
-                    weekTokens += event.tokens
-                    weekCost += event.cost
+                if ts >= bounds.year {
+                    year.input     += event.inputTokens
+                    year.cacheRead += event.cachedTokens
+                    year.output    += event.outputTokens
+                    year.reasoning += event.reasoningTokens
+                    yearCost += event.cost
                 }
                 if ts >= bounds.month {
-                    monthTokens += event.tokens
+                    month.input     += event.inputTokens
+                    month.cacheRead += event.cachedTokens
+                    month.output    += event.outputTokens
+                    month.reasoning += event.reasoningTokens
                     monthCost += event.cost
+                }
+                if ts >= bounds.week {
+                    week.input     += event.inputTokens
+                    week.cacheRead += event.cachedTokens
+                    week.output    += event.outputTokens
+                    week.reasoning += event.reasoningTokens
+                    weekCost += event.cost
+                }
+                if ts >= bounds.day {
+                    today.input     += event.inputTokens
+                    today.cacheRead += event.cachedTokens
+                    today.output    += event.outputTokens
+                    today.reasoning += event.reasoningTokens
+                    todayCost += event.cost
                 }
                 if fileLastEventTime.map({ ts > $0 }) ?? true {
                     fileLastEventTime = ts
@@ -506,29 +585,254 @@ private extension UsageLogScanner {
             }
         }
 
-        return AgentUsage(
-            todayTokens: todayTokens,
-            todayCost: todayCost,
-            weekTokens: weekTokens,
-            weekCost: weekCost,
-            monthTokens: monthTokens,
-            monthCost: monthCost,
-            window: nil,
-            activeSessions: activeSessions,
-            costIsApprox: true
-        )
+        var u = AgentUsage()
+        u.todayTokens = today.total;  u.todayCost = todayCost;  u.todayBreakdown = today
+        u.weekTokens  = week.total;   u.weekCost  = weekCost;   u.weekBreakdown  = week
+        u.monthTokens = month.total;  u.monthCost = monthCost;  u.monthBreakdown = month
+        u.yearTokens  = year.total;   u.yearCost  = yearCost;   u.yearBreakdown  = year
+        u.activeSessions = activeSessions
+        u.costIsApprox = true
+        return u
     }
 
-    static func timeBounds(now: Date) -> (day: Date, week: Date, month: Date) {
+    // MARK: - Dashboard
+
+    static func buildDashboard(claudeFiles: [String: ClaudeFileCache],
+                                codexFiles: [String: CodexFileCache],
+                                now: Date) -> DashboardData {
+        var cal = Calendar.current
+        cal.timeZone = .current
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = .current
+
+        var seenIds = Set<String>()
+        var totalTokens = 0
+        var totalCost = 0.0
+        var earliestDate: Date?
+        var dayToCost     = [String: Double]()
+        var dayToByClaude = [String: Double]()
+        var dayToByCodex  = [String: Double]()
+        var hourTokens    = Array(repeating: 0, count: 24)
+        var modelTokens   = [String: Int]()
+        var modelCost     = [String: Double]()
+        var projectTokens = [String: Int]()
+        var projectCost   = [String: Double]()
+        var weekendTokens = 0
+        var dayProjects   = [String: Set<String>]()
+
+        // Claude events
+        for (filePath, file) in claudeFiles {
+            let proj = file.cwd.flatMap { c -> String? in
+                let n = URL(fileURLWithPath: c).lastPathComponent
+                return n.isEmpty ? nil : n
+            } ?? encodedProjectName(from: filePath)
+
+            for event in file.events {
+                guard !event.dedupeKey.isEmpty,
+                      seenIds.insert(event.dedupeKey).inserted else { continue }
+                let ts = Date(timeIntervalSince1970: event.timestamp)
+                let day = fmt.string(from: ts)
+                let tok = event.tokens
+                totalTokens += tok; totalCost += event.cost
+                if earliestDate == nil || ts < earliestDate! { earliestDate = ts }
+                dayToCost[day, default: 0]     += event.cost
+                dayToByClaude[day, default: 0] += event.cost
+                let h = cal.component(.hour, from: ts)
+                hourTokens[h] += tok
+                let mk = event.model.isEmpty ? "claude" : event.model
+                modelTokens[mk, default: 0] += tok; modelCost[mk, default: 0] += event.cost
+                projectTokens[proj, default: 0] += tok; projectCost[proj, default: 0] += event.cost
+                let wd = cal.component(.weekday, from: ts)
+                if wd == 1 || wd == 7 { weekendTokens += tok }
+                dayProjects[day, default: []].insert(proj)
+            }
+        }
+
+        // Codex events
+        for file in codexFiles.values {
+            for event in file.events {
+                let ts = Date(timeIntervalSince1970: event.timestamp)
+                let day = fmt.string(from: ts)
+                let tok = event.tokens
+                totalTokens += tok; totalCost += event.cost
+                if earliestDate == nil || ts < earliestDate! { earliestDate = ts }
+                dayToCost[day, default: 0]    += event.cost
+                dayToByCodex[day, default: 0] += event.cost
+                let h = cal.component(.hour, from: ts)
+                hourTokens[h] += tok
+                modelTokens["codex", default: 0] += tok; modelCost["codex", default: 0] += event.cost
+                projectTokens["Codex", default: 0] += tok; projectCost["Codex", default: 0] += event.cost
+                let wd = cal.component(.weekday, from: ts)
+                if wd == 1 || wd == 7 { weekendTokens += tok }
+            }
+        }
+
+        let activeDays = dayToCost.count
+        let dailyAvg = activeDays > 0 ? totalCost / Double(activeDays) : 0
+        let peakEntry = dayToCost.max(by: { $0.value < $1.value })
+        let peakDay: String = {
+            guard let p = peakEntry else { return "" }
+            let parts = p.key.split(separator: "-")
+            return parts.count == 3 ? "\(parts[1])-\(parts[2])" : p.key
+        }()
+        let topModelKey = modelTokens.max(by: { $0.value < $1.value })?.key ?? ""
+        let activeDaySet = Set(dayToCost.keys)
+        let streak = computeStreak(activeDaySet: activeDaySet, now: now, fmt: fmt, cal: cal)
+        let weekendPct = totalTokens > 0 ? Double(weekendTokens) / Double(totalTokens) * 100 : 0
+        let maxProjInDay = dayProjects.values.map(\.count).max() ?? 0
+        let uniqueProjs = Set(projectTokens.keys).count
+
+        let dailyCosts = dayToCost.map {
+            DailyEntry(date: $0.key, totalCost: $0.value,
+                       byClaude: dayToByClaude[$0.key] ?? 0,
+                       byCodex: dayToByCodex[$0.key] ?? 0)
+        }
+        let models = modelTokens.map {
+            ModelStat(model: $0.key, displayName: modelDisplayName($0.key),
+                      tokens: $0.value, cost: modelCost[$0.key] ?? 0)
+        }.sorted(by: { $0.tokens > $1.tokens })
+        let projects = projectTokens.map {
+            ProjectStat(project: $0.key, tokens: $0.value, cost: projectCost[$0.key] ?? 0)
+        }.sorted(by: { $0.tokens > $1.tokens })
+        let achievements = computeAchievements(
+            totalTokens: totalTokens, totalCost: totalCost, streak: streak,
+            maxProjInDay: maxProjInDay, uniqueProjs: uniqueProjs, weekendPct: weekendPct
+        )
+
+        var data = DashboardData()
+        data.dailyCosts       = dailyCosts
+        data.heatmap          = dayToCost
+        data.totalTokens      = totalTokens
+        data.totalCost        = totalCost
+        data.startDate        = earliestDate
+        data.activeDays       = activeDays
+        data.streak           = streak
+        data.dailyAvgCost     = dailyAvg
+        data.peakDay          = peakDay
+        data.topModel         = modelDisplayName(topModelKey)
+        data.wordEquivalent   = Int(Double(totalTokens) * 0.60)
+        data.hourlyTokens     = hourTokens
+        data.modelBreakdown   = models
+        data.projectBreakdown = projects
+        data.achievements     = achievements
+        return data
+    }
+
+    // MARK: - Dashboard helpers
+
+    static func modelDisplayName(_ model: String) -> String {
+        let m = model.lowercased()
+        func ver(_ family: String) -> String {
+            let parts = m.components(separatedBy: "-")
+            if let idx = parts.firstIndex(of: family), idx + 2 < parts.count {
+                return "\(family.capitalized) \(parts[idx+1]).\(parts[idx+2])"
+            }
+            if let idx = parts.firstIndex(of: family), idx + 1 < parts.count {
+                return "\(family.capitalized) \(parts[idx+1])"
+            }
+            return family.capitalized
+        }
+        if m.contains("opus")   { return ver("opus")   }
+        if m.contains("sonnet") { return ver("sonnet") }
+        if m.contains("haiku")  { return ver("haiku")  }
+        if m.contains("gpt")    {
+            let parts = m.components(separatedBy: "-")
+            if let idx = parts.firstIndex(of: "gpt"), idx + 1 < parts.count {
+                return "GPT-\(parts[idx+1])"
+            }
+            return "GPT"
+        }
+        if m == "codex" { return "Codex" }
+        return model
+    }
+
+    private static func encodedProjectName(from filePath: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let projectsPath = home + "/.claude/projects"
+        var rel = filePath
+        if rel.hasPrefix(projectsPath) { rel = String(rel.dropFirst(projectsPath.count)) }
+        let dirName = rel.split(separator: "/").first.map(String.init) ?? rel
+        // strip leading "-"
+        var stripped = dirName.hasPrefix("-") ? String(dirName.dropFirst()) : dirName
+        // strip encoded home prefix
+        let homeEncoded = String(home.dropFirst()).replacingOccurrences(of: "/", with: "-")
+        if stripped.hasPrefix(homeEncoded) {
+            stripped = String(stripped.dropFirst(homeEncoded.count))
+            if stripped.hasPrefix("-") { stripped = String(stripped.dropFirst()) }
+        }
+        // take last 2 dash-separated words as display name
+        let parts = stripped.components(separatedBy: "-").filter { !$0.isEmpty }
+        if parts.count >= 2 { return parts.suffix(2).joined(separator: "-") }
+        return parts.last ?? dirName
+    }
+
+    private static func computeStreak(activeDaySet: Set<String>, now: Date,
+                                      fmt: DateFormatter, cal: Calendar) -> Int {
+        var streak = 0
+        var date = cal.startOfDay(for: now)
+        // allow today to have no data yet (check yesterday first)
+        if !activeDaySet.contains(fmt.string(from: date)) {
+            date = cal.date(byAdding: .day, value: -1, to: date)!
+        }
+        while activeDaySet.contains(fmt.string(from: date)) {
+            streak += 1
+            date = cal.date(byAdding: .day, value: -1, to: date)!
+        }
+        return streak
+    }
+
+    private static func computeAchievements(totalTokens: Int, totalCost: Double,
+                                            streak: Int, maxProjInDay: Int,
+                                            uniqueProjs: Int, weekendPct: Double) -> [AchievementDef] {
+        var list = [AchievementDef]()
+        if totalTokens >= 1_000_000_000 {
+            list.append(.init(key: "billion", title: "十亿俱乐部",
+                              subtitle: Fmt.human(totalTokens) + " tokens",
+                              icon: "diamond.fill", iconColor: .orange))
+        }
+        if totalCost >= 1000 {
+            list.append(.init(key: "kilo_usd", title: "破千刀",
+                              subtitle: "≈$\(Int(totalCost))",
+                              icon: "dollarsign.circle.fill", iconColor: .red))
+        }
+        if streak >= 7 {
+            list.append(.init(key: "streak", title: "坚持",
+                              subtitle: "连续 \(streak) 天",
+                              icon: "flame.fill", iconColor: .orange))
+        }
+        if maxProjInDay >= 5 {
+            list.append(.init(key: "multi_project", title: "多线作战",
+                              subtitle: "单日 \(maxProjInDay) 个项目",
+                              icon: "square.grid.2x2.fill", iconColor: .purple))
+        }
+        if uniqueProjs >= 10 {
+            list.append(.init(key: "spread", title: "广撒网",
+                              subtitle: "\(uniqueProjs) 个项目",
+                              icon: "network", iconColor: .blue))
+        }
+        if weekendPct >= 30 {
+            list.append(.init(key: "weekend", title: "周末战士",
+                              subtitle: String(format: "周末占 %.0f%%", weekendPct),
+                              icon: "figure.strengthtraining.traditional", iconColor: .green))
+        }
+        return list
+    }
+
+    static func timeBounds(now: Date) -> (day: Date, week: Date, month: Date, year: Date) {
         var cal = Calendar.current
         cal.firstWeekday = 2
         let day = cal.startOfDay(for: now)
         let weekdayIdx = (cal.component(.weekday, from: now) - cal.firstWeekday + 7) % 7
         let week = cal.date(byAdding: .day, value: -weekdayIdx, to: day)!
-        var comps = cal.dateComponents([.year, .month], from: now)
-        comps.day = 1
-        let month = cal.date(from: comps)!
-        return (day, week, month)
+        var monthComps = cal.dateComponents([.year, .month], from: now)
+        monthComps.day = 1
+        let month = cal.date(from: monthComps)!
+        var yearComps = cal.dateComponents([.year], from: now)
+        yearComps.month = 1; yearComps.day = 1
+        let year = cal.date(from: yearComps)!
+        return (day, week, month, year)
     }
 
     private struct Block {
