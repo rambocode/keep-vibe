@@ -151,23 +151,40 @@ struct MenuContentView: View {
 
     // MARK: - Cards
 
+    // 单张工具卡片的描述：把 8 路工具收敛成数组，避免巨型 Optional tuple ViewBuilder
+    private struct CardEntry: Identifiable {
+        let id: String
+        let tint: Color
+        let content: AnyView
+    }
+
+    // 当前 sel 下应展示的工具卡片（按固定顺序）
+    private var visibleCards: [CardEntry] {
+        var out: [CardEntry] = []
+        func add(_ id: String, _ show: Bool, _ usage: AgentUsage?, _ tint: Color,
+                 _ make: (AgentUsage) -> AnyView) {
+            if show, let u = usage, u.tokens(for: sel) > 0 {
+                out.append(CardEntry(id: id, tint: tint, content: make(u)))
+            }
+        }
+        add("claude",   showClaude,   state.claude,   Theme.claude)   { AnyView(claudeBlock($0, sel)) }
+        add("codex",    showCodex,    state.codex,    Theme.codex)    { AnyView(codexBlock($0, sel)) }
+        add("gemini",   showGemini,   state.gemini,   Theme.gemini)   { AnyView(toolBlock(.gemini,   $0, sel)) }
+        add("grok",     showGrok,     state.grok,     Theme.grok)     { AnyView(toolBlock(.grok,     $0, sel)) }
+        add("aider",    showAider,    state.aider,    Theme.aider)    { AnyView(toolBlock(.aider,    $0, sel)) }
+        add("openclaw", showOpenClaw, state.openclaw, Theme.openclaw) { AnyView(toolBlock(.openclaw, $0, sel)) }
+        add("opencode", showOpenCode, state.opencode, Theme.opencode) { AnyView(toolBlock(.opencode, $0, sel)) }
+        add("qoder",    showQoder,    state.qoder,    Theme.qoder)    { AnyView(toolBlock(.qoder,    $0, sel)) }
+        return out
+    }
+
     private var cardsContent: some View {
-        VStack(alignment: .leading, spacing: 13) {
+        let cards = visibleCards
+        let visibleIDs = Set(cards.map(\.id))
+        return VStack(alignment: .leading, spacing: 13) {
             SegmentedTabs(sel: $sel)
 
-            let hasClaude   = showClaude   && (state.claude?.tokens(for: sel) ?? 0) > 0
-            let hasCodex    = showCodex    && (state.codex?.tokens(for: sel)  ?? 0) > 0
-            let hasGemini   = showGemini   && (state.gemini?.tokens(for: sel) ?? 0) > 0
-            let hasGrok     = showGrok     && (state.grok?.tokens(for: sel)   ?? 0) > 0
-            let hasAider    = showAider    && (state.aider?.tokens(for: sel)  ?? 0) > 0
-            let hasClaw     = showOpenClaw && (state.openclaw?.tokens(for: sel) ?? 0) > 0
-            let hasOCode    = showOpenCode && (state.opencode?.tokens(for: sel) ?? 0) > 0
-            let hasQoder    = showQoder    && (state.qoder?.tokens(for: sel)  ?? 0) > 0
-
-            let anyVisible = hasClaude || hasCodex || hasGemini || hasGrok ||
-                             hasAider || hasClaw || hasOCode || hasQoder
-
-            if !anyVisible {
+            if cards.isEmpty {
                 if state.claude == nil && state.codex == nil {
                     HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
                         .frame(height: 90)
@@ -180,29 +197,24 @@ struct MenuContentView: View {
                 }
             } else if useWide {
                 EqualHeightGrid() {
-                    if hasClaude { Card(tint: Theme.claude) { claudeBlock(state.claude!, sel) } }
-                    if hasCodex  { Card(tint: Theme.codex)  { codexBlock(state.codex!, sel) } }
-                    if hasGemini { Card(tint: Theme.gemini) { toolBlock(.gemini,   state.gemini!,   sel) } }
-                    if hasGrok   { Card(tint: Theme.grok)   { toolBlock(.grok,     state.grok!,     sel) } }
-                    if hasAider  { Card(tint: Theme.aider)  { toolBlock(.aider,    state.aider!,    sel) } }
-                    if hasClaw   { Card(tint: Theme.openclaw) { toolBlock(.openclaw, state.openclaw!, sel) } }
-                    if hasOCode  { Card(tint: Theme.opencode) { toolBlock(.opencode, state.opencode!, sel) } }
-                    if hasQoder  { Card(tint: Theme.qoder)  { toolBlock(.qoder,    state.qoder!,    sel) } }
+                    ForEach(cards) { c in
+                        Card(tint: c.tint) { c.content }
+                    }
                 }
             } else {
-                if hasClaude { Card(tint: Theme.claude) { claudeBlock(state.claude!, sel) } }
-                if hasCodex  { Card(tint: Theme.codex)  { codexBlock(state.codex!, sel) } }
-                if hasGemini { Card(tint: Theme.gemini) { toolBlock(.gemini,   state.gemini!,   sel) } }
-                if hasGrok   { Card(tint: Theme.grok)   { toolBlock(.grok,     state.grok!,     sel) } }
-                if hasAider  { Card(tint: Theme.aider)  { toolBlock(.aider,    state.aider!,    sel) } }
-                if hasClaw   { Card(tint: Theme.openclaw) { toolBlock(.openclaw, state.openclaw!, sel) } }
-                if hasOCode  { Card(tint: Theme.opencode) { toolBlock(.opencode, state.opencode!, sel) } }
-                if hasQoder  { Card(tint: Theme.qoder)  { toolBlock(.qoder,    state.qoder!,    sel) } }
+                ForEach(cards) { c in
+                    Card(tint: c.tint) { c.content }
+                }
             }
 
-            inactiveToolsLine(hasClaude: hasClaude, hasCodex: hasCodex, hasGemini: hasGemini,
-                              hasGrok: hasGrok, hasAider: hasAider, hasClaw: hasClaw,
-                              hasOCode: hasOCode, hasQoder: hasQoder)
+            inactiveToolsLine(hasClaude: visibleIDs.contains("claude"),
+                              hasCodex:  visibleIDs.contains("codex"),
+                              hasGemini: visibleIDs.contains("gemini"),
+                              hasGrok:   visibleIDs.contains("grok"),
+                              hasAider:  visibleIDs.contains("aider"),
+                              hasClaw:   visibleIDs.contains("openclaw"),
+                              hasOCode:  visibleIDs.contains("opencode"),
+                              hasQoder:  visibleIDs.contains("qoder"))
         }
     }
 
