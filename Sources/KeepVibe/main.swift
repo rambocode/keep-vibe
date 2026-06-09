@@ -7,10 +7,14 @@ import UserNotifications
 // MARK: - AppDelegate
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
+    // 弹窗显示期间监听全局点击，作为 transient 行为的兜底，确保点击外部必然关闭
+    private var popoverEventMonitor: Any?
+    // 承载弹窗定位的透明锚点窗口：始终贴到图标真实屏幕位置，避免 Hidden Bar 收起图标时弹窗跳到 (0,0)
+    private var popoverAnchorWindow: NSWindow?
     private let state = AppState()
     private let keepAwakeManager = KeepAwakeManager()
     private let sitReminder = SitReminder()
@@ -102,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
+        popover.delegate = self
         self.popover = popover
 
         // 配置空闲提醒（监听 idleReminderMinutes）
@@ -113,9 +118,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureStatusBarButton(_ button: NSStatusBarButton) {
-        button.image = nil
+        // 基底图标由 button.image 承载，保证状态项始终可见、可点击。
+        button.image = makeStatusBarSymbol("hourglass") ?? makeStatusBarIcon()
+        button.imagePosition = .imageLeading
         button.attributedTitle = NSAttributedString()
         button.isBordered = false
+    }
+
+    /// 生成菜单栏用的模板 SF Symbol 图标（跟随系统明暗自动着色，保证两种外观下都可见）。
+    private func makeStatusBarSymbol(_ name: String) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: "KeepVibe")?
+            .withSymbolConfiguration(config) else { return nil }
+        image.isTemplate = true
+        return image
     }
 
     private func makeStatusBarIcon() -> NSImage? {
@@ -200,9 +216,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let popover, let button = statusItem?.button else { return }
         if popover.isShown {
             popover.performClose(sender)
+            return
+        }
+
+        refresh()
+
+        // accessory app 的 transient 弹窗只有在 app 处于 active 时才能可靠
+        // 捕获「点击其它应用」的事件；不激活会导致偶发不自动隐藏。
+        NSApp.activate(ignoringOtherApps: true)
+        showPopover(popover, under: button)
+        installPopoverEventMonitor()
+    }
+
+    /// 把弹窗显示在状态栏图标的正下方——无论图标被 Hidden Bar / Bartender 等移到屏幕
+    /// 左侧还是右侧。关键：不直接用 `show(relativeTo:of:)`（图标坐标异常时 AppKit 会把
+    /// 弹窗 fallback 到屏幕原点 (0,0)），而是用一个与图标等位的透明锚点窗口承载定位，
+    /// 弹窗箭头始终指向该矩形底边中点。
+    private func showPopover(_ popover: NSPopover, under button: NSStatusBarButton) {
+        let anchorRect = statusItemScreenRect(button)
+        let anchor = popoverAnchorWindow ?? makePopoverAnchorWindow()
+        popoverAnchorWindow = anchor
+        anchor.setFrame(anchorRect, display: false)
+        anchor.orderFrontRegardless()
+        guard let anchorView = anchor.contentView else { return }
+        popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .minY)
+    }
+
+    /// 图标在屏幕上的真实矩形（屏幕坐标，左下为原点）。
+    /// 若图标被收起到屏幕可见区之外，退回到鼠标光标处，避免落到 (0,0)。
+    private func statusItemScreenRect(_ button: NSStatusBarButton) -> NSRect {
+        let statusItemRect: NSRect?
+        if let win = button.window, button.bounds.width > 0 {
+            statusItemRect = win.convertToScreen(button.convert(button.bounds, to: nil))
         } else {
-            refresh()
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            statusItemRect = nil
+        }
+
+        return PopoverAnchorResolver.resolve(
+            statusItemRect: statusItemRect,
+            screenFrames: NSScreen.screens.map(\.frame),
+            mouseLocation: NSEvent.mouseLocation
+        )
+    }
+
+    /// 创建一个透明、不吃事件的锚点窗口，仅用于定位弹窗（不显示任何内容）。
+    private func makePopoverAnchorWindow() -> NSWindow {
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
+                         styleMask: .borderless, backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
+        w.backgroundColor = .clear
+        w.alphaValue = 0
+        w.level = .statusBar
+        w.ignoresMouseEvents = true
+        return w
+    }
+
+    // MARK: - Popover 外部点击兜底
+
+    /// 弹窗显示后，监听全局鼠标按下；点击发生在弹窗之外时立即关闭。
+    private func installPopoverEventMonitor() {
+        removePopoverEventMonitor()
+        popoverEventMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let popover = self.popover, popover.isShown else { return }
+                popover.performClose(nil)
+            }
+        }
+    }
+
+    private func removePopoverEventMonitor() {
+        if let monitor = popoverEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            popoverEventMonitor = nil
+        }
+    }
+
+    // MARK: - NSPopoverDelegate
+
+    nonisolated func popoverDidClose(_ notification: Notification) {
+        Task { @MainActor in
+            self.removePopoverEventMonitor()
+            self.popoverAnchorWindow?.orderOut(nil)
         }
     }
 

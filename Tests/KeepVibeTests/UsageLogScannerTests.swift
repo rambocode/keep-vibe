@@ -291,6 +291,42 @@ final class SitReminderTests: XCTestCase {
     }
 }
 
+final class PopoverAnchorResolverTests: XCTestCase {
+    private let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+
+    func testUsesStatusItemRectWhenItIsOnScreenAndNearMouse() {
+        let statusRect = CGRect(x: 1200, y: 876, width: 70, height: 22)
+
+        let resolved = PopoverAnchorResolver.resolve(
+            statusItemRect: statusRect,
+            screenFrames: [screen],
+            mouseLocation: CGPoint(x: 1235, y: 887)
+        )
+
+        XCTAssertEqual(resolved, statusRect)
+    }
+
+    func testFallsBackToMouseWhenStatusItemRectIsOffScreen() {
+        let resolved = PopoverAnchorResolver.resolve(
+            statusItemRect: CGRect(x: -200, y: 876, width: 70, height: 22),
+            screenFrames: [screen],
+            mouseLocation: CGPoint(x: 1235, y: 887)
+        )
+
+        XCTAssertEqual(resolved, CGRect(x: 1224, y: 876, width: 22, height: 22))
+    }
+
+    func testFallsBackToMouseWhenHiddenBarReportsAVisibleButWrongRect() {
+        let resolved = PopoverAnchorResolver.resolve(
+            statusItemRect: CGRect(x: 20, y: 876, width: 70, height: 22),
+            screenFrames: [screen],
+            mouseLocation: CGPoint(x: 1235, y: 887)
+        )
+
+        XCTAssertEqual(resolved, CGRect(x: 1224, y: 876, width: 22, height: 22))
+    }
+}
+
 @MainActor
 private final class SitReminderTestClock {
     var now = Date(timeIntervalSince1970: 0)
