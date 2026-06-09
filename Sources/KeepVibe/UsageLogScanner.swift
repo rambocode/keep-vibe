@@ -468,8 +468,8 @@ private extension UsageLogScanner {
         let bounds = timeBounds(now: now)
         let fiveMinAgo = now.addingTimeInterval(-5 * 60)
         var seenIds = Set<String>()
-        var todayCost = 0.0, weekCost = 0.0, monthCost = 0.0, yearCost = 0.0
-        var today = TokenBreakdown(), week = TokenBreakdown(),
+        var todayCost = 0.0, yesterdayCost = 0.0, weekCost = 0.0, monthCost = 0.0, yearCost = 0.0
+        var today = TokenBreakdown(), yesterday = TokenBreakdown(), week = TokenBreakdown(),
             month = TokenBreakdown(), year = TokenBreakdown()
         var sessionLastSeen = [String: Date]()
         var windowTimestamps = [Date]()
@@ -511,6 +511,13 @@ private extension UsageLogScanner {
                 today.cacheRead  += event.cacheReadTokens
                 todayCost += event.cost
             }
+            if ts >= bounds.yesterday && ts < bounds.day {
+                yesterday.input      += event.inputTokens
+                yesterday.output     += event.outputTokens
+                yesterday.cacheWrite += event.cacheWriteTokens
+                yesterday.cacheRead  += event.cacheReadTokens
+                yesterdayCost += event.cost
+            }
 
             windowTimestamps.append(ts)
             windowTokens.append(event.tokens)
@@ -524,6 +531,7 @@ private extension UsageLogScanner {
 
         var u = AgentUsage()
         u.todayTokens = today.total;  u.todayCost = todayCost;  u.todayBreakdown = today
+        u.yesterdayTokens = yesterday.total; u.yesterdayCost = yesterdayCost; u.yesterdayBreakdown = yesterday
         u.weekTokens  = week.total;   u.weekCost  = weekCost;   u.weekBreakdown  = week
         u.monthTokens = month.total;  u.monthCost = monthCost;  u.monthBreakdown = month
         u.yearTokens  = year.total;   u.yearCost  = yearCost;   u.yearBreakdown  = year
@@ -536,9 +544,10 @@ private extension UsageLogScanner {
     static func summarizeCodex(files: [String: CodexFileCache], now: Date, cutoff: Date) -> AgentUsage {
         let bounds = timeBounds(now: now)
         let activeWindow = now.addingTimeInterval(-5 * 60)
-        var todayCost = 0.0, weekCost = 0.0, monthCost = 0.0, yearCost = 0.0
+        var todayCost = 0.0, yesterdayCost = 0.0, weekCost = 0.0, monthCost = 0.0, yearCost = 0.0
         // Codex 口径：total=input+output（cached_input 是 input 子集、reasoning 不计入 total_tokens）
-        var today = TokenBreakdown(isCodex: true), week = TokenBreakdown(isCodex: true),
+        var today = TokenBreakdown(isCodex: true), yesterday = TokenBreakdown(isCodex: true),
+            week = TokenBreakdown(isCodex: true),
             month = TokenBreakdown(isCodex: true), year = TokenBreakdown(isCodex: true)
         var activeSessions = 0
 
@@ -576,6 +585,13 @@ private extension UsageLogScanner {
                     today.reasoning += event.reasoningTokens
                     todayCost += event.cost
                 }
+                if ts >= bounds.yesterday && ts < bounds.day {
+                    yesterday.input     += event.inputTokens
+                    yesterday.cacheRead += event.cachedTokens
+                    yesterday.output    += event.outputTokens
+                    yesterday.reasoning += event.reasoningTokens
+                    yesterdayCost += event.cost
+                }
                 if fileLastEventTime.map({ ts > $0 }) ?? true {
                     fileLastEventTime = ts
                 }
@@ -587,6 +603,7 @@ private extension UsageLogScanner {
 
         var u = AgentUsage()
         u.todayTokens = today.total;  u.todayCost = todayCost;  u.todayBreakdown = today
+        u.yesterdayTokens = yesterday.total; u.yesterdayCost = yesterdayCost; u.yesterdayBreakdown = yesterday
         u.weekTokens  = week.total;   u.weekCost  = weekCost;   u.weekBreakdown  = week
         u.monthTokens = month.total;  u.monthCost = monthCost;  u.monthBreakdown = month
         u.yearTokens  = year.total;   u.yearCost  = yearCost;   u.yearBreakdown  = year
@@ -820,10 +837,11 @@ private extension UsageLogScanner {
         return list
     }
 
-    static func timeBounds(now: Date) -> (day: Date, week: Date, month: Date, year: Date) {
+    static func timeBounds(now: Date) -> (day: Date, yesterday: Date, week: Date, month: Date, year: Date) {
         var cal = Calendar.current
         cal.firstWeekday = 2
         let day = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: day)!
         let weekdayIdx = (cal.component(.weekday, from: now) - cal.firstWeekday + 7) % 7
         let week = cal.date(byAdding: .day, value: -weekdayIdx, to: day)!
         var monthComps = cal.dateComponents([.year, .month], from: now)
@@ -832,7 +850,7 @@ private extension UsageLogScanner {
         var yearComps = cal.dateComponents([.year], from: now)
         yearComps.month = 1; yearComps.day = 1
         let year = cal.date(from: yearComps)!
-        return (day, week, month, year)
+        return (day, yesterday, week, month, year)
     }
 
     private struct Block {

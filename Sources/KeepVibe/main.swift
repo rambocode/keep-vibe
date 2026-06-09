@@ -408,6 +408,9 @@ private func toolStatToAgentUsage(_ stat: ExternalToolStat) -> AgentUsage {
     u.todayTokens  = (stat.today?.inputTokens ?? 0) + (stat.today?.outputTokens ?? 0)
     u.todayCost    = stat.today?.cost ?? 0
     u.todayBreakdown = TokenBreakdown(input: stat.today?.inputTokens ?? 0, output: stat.today?.outputTokens ?? 0)
+    u.yesterdayTokens = (stat.yesterday?.inputTokens ?? 0) + (stat.yesterday?.outputTokens ?? 0)
+    u.yesterdayCost = stat.yesterday?.cost ?? 0
+    u.yesterdayBreakdown = TokenBreakdown(input: stat.yesterday?.inputTokens ?? 0, output: stat.yesterday?.outputTokens ?? 0)
     u.weekTokens   = (stat.week?.inputTokens ?? 0) + (stat.week?.outputTokens ?? 0)
     u.weekCost     = stat.week?.cost ?? 0
     u.weekBreakdown = TokenBreakdown(input: stat.week?.inputTokens ?? 0, output: stat.week?.outputTokens ?? 0)
@@ -429,6 +432,7 @@ if CommandLine.arguments.contains("--dump") {
         let w = u.window.map { "5h窗口 tokens=\($0.tokens) tok/min=\(Int($0.tokensPerMin)) resetIn=\(Int($0.resetIn ?? 0))s used=\(String(format: "%.2f", $0.usedFraction))" } ?? "(无窗口)"
         return """
           今日: \(u.todayTokens) tok  $\(String(format: "%.2f", u.todayCost))
+          昨日: \(u.yesterdayTokens) tok  $\(String(format: "%.2f", u.yesterdayCost))
           本周: \(u.weekTokens) tok  $\(String(format: "%.2f", u.weekCost))
           本月: \(u.monthTokens) tok  $\(String(format: "%.2f", u.monthCost))
           \(w)

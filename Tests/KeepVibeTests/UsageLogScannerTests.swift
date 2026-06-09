@@ -108,6 +108,33 @@ final class UsageLogScannerTests: XCTestCase {
         XCTAssertEqual(usage.claude.monthTokens, 50)
     }
 
+    func testYesterdayRangeUsesPreviousCalendarDayForClaudeAndCodex() throws {
+        let roots = try makeRoots()
+        let claudeFile = roots.claudeProjects.appendingPathComponent("project/session.jsonl")
+        let codexFile = roots.codexSessions.appendingPathComponent("2026/06/session.jsonl")
+
+        try writeLines([
+            claudeLine(id: "before-yesterday", timestamp: "2026-06-06T23:59:00.000+08:00", input: 7, output: 0),
+            claudeLine(id: "yesterday", timestamp: "2026-06-07T12:00:00.000+08:00", input: 20, output: 3),
+            claudeLine(id: "today", timestamp: "2026-06-08T09:00:00.000+08:00", input: 11, output: 1)
+        ], to: claudeFile)
+        try writeLines([
+            codexLine(timestamp: "2026-06-07T13:00:00.000+08:00", input: 30, cachedInput: 5, output: 4, reasoning: 2, total: 34),
+            codexLine(timestamp: "2026-06-08T09:30:00.000+08:00", input: 40, cachedInput: 10, output: 6, reasoning: 3, total: 46)
+        ], to: codexFile)
+
+        let usage = UsageLogScanner.summarizeAll(now: date("2026-06-08T10:00:00.000+08:00"), roots: roots)
+
+        XCTAssertEqual(usage.claude.todayTokens, 12)
+        XCTAssertEqual(usage.claude.yesterdayTokens, 23)
+        XCTAssertEqual(usage.claude.weekTokens, 12)
+        XCTAssertEqual(usage.claude.monthTokens, 42)
+        XCTAssertEqual(usage.codex.todayTokens, 46)
+        XCTAssertEqual(usage.codex.yesterdayTokens, 34)
+        XCTAssertEqual(usage.codex.yesterdayBreakdown.reasoning, 2)
+        XCTAssertEqual(usage.codex.weekTokens, 46)
+    }
+
     private func makeRoots() throws -> UsageLogRoots {
         let claude = tempRoot.appendingPathComponent("claude/projects")
         let codex = tempRoot.appendingPathComponent("codex/sessions")
@@ -186,6 +213,7 @@ final class ExternalUsageDecodingTests: XCTestCase {
           "grok": {
             "ranges": {
               "today": {"tokens": 1234, "sessions": 2, "turns": 4},
+              "yesterday": {"tokens": 1111, "sessions": 1},
               "week": {"tokens": 2345, "sessions": 3},
               "month": {"tokens": 3456, "sessions": 4},
               "year": {"tokens": 4567, "sessions": 5}
@@ -203,6 +231,7 @@ final class ExternalUsageDecodingTests: XCTestCase {
         XCTAssertEqual(usage.grok?.today?.inputTokens, 1234)
         XCTAssertEqual(usage.grok?.today?.outputTokens, 0)
         XCTAssertEqual(usage.grok?.today?.cost, 0)
+        XCTAssertEqual(usage.grok?.yesterday?.inputTokens, 1111)
         XCTAssertEqual(usage.grok?.year?.inputTokens, 4567)
     }
 }

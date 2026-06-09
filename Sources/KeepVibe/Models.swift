@@ -61,6 +61,8 @@ struct TokenBreakdown: Codable {
 struct AgentUsage {
     var todayTokens: Int = 0
     var todayCost: Double = 0
+    var yesterdayTokens: Int = 0
+    var yesterdayCost: Double = 0
     var weekTokens: Int = 0
     var weekCost: Double = 0
     var monthTokens: Int = 0
@@ -68,6 +70,7 @@ struct AgentUsage {
     var yearTokens: Int = 0
     var yearCost: Double = 0
     var todayBreakdown: TokenBreakdown = .init()
+    var yesterdayBreakdown: TokenBreakdown = .init()
     var weekBreakdown:  TokenBreakdown = .init()
     var monthBreakdown: TokenBreakdown = .init()
     var yearBreakdown:  TokenBreakdown = .init()
@@ -79,6 +82,7 @@ struct AgentUsage {
     func breakdown(for key: RangeKey) -> TokenBreakdown {
         switch key {
         case .today: return todayBreakdown
+        case .yesterday: return yesterdayBreakdown
         case .week:  return weekBreakdown
         case .month: return monthBreakdown
         case .year:  return yearBreakdown
@@ -88,11 +92,12 @@ struct AgentUsage {
 
 // 时间范围选择器 key（与 SegmentedTabs 绑定）
 enum RangeKey: String, CaseIterable, Identifiable {
-    case today, week, month, year
+    case today, yesterday, week, month, year
     var id: String { rawValue }
     var label: String {
         switch self {
         case .today: return "今日"
+        case .yesterday: return "昨日"
         case .week:  return "本周"
         case .month: return "本月"
         case .year:  return "今年"
@@ -104,6 +109,7 @@ extension AgentUsage {
     func tokens(for key: RangeKey) -> Int {
         switch key {
         case .today: return todayTokens
+        case .yesterday: return yesterdayTokens
         case .week:  return weekTokens
         case .month: return monthTokens
         case .year:  return yearTokens
@@ -112,6 +118,7 @@ extension AgentUsage {
     func cost(for key: RangeKey) -> Double {
         switch key {
         case .today: return todayCost
+        case .yesterday: return yesterdayCost
         case .week:  return weekCost
         case .month: return monthCost
         case .year:  return yearCost

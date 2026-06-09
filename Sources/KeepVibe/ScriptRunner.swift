@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - 外部工具用量数据结构
 
-/// 单个时间范围（今日/本周/本月/今年）的用量统计。
+/// 单个时间范围（今日/昨日/本周/本月/今年）的用量统计。
 /// JSON 字段使用简写：in / out / cost / sessions。
 struct ExternalToolRange: Decodable, Sendable {
     var inputTokens: Int
@@ -28,9 +28,10 @@ struct ExternalToolRange: Decodable, Sendable {
     }
 }
 
-/// 单个外部工具的四个时间维度统计。任意维度都可能缺省。
+/// 单个外部工具的五个时间维度统计。任意维度都可能缺省。
 struct ExternalToolStat: Decodable, Sendable {
     var today: ExternalToolRange?
+    var yesterday: ExternalToolRange?
     var week: ExternalToolRange?
     var month: ExternalToolRange?
     var year: ExternalToolRange?
@@ -38,6 +39,7 @@ struct ExternalToolStat: Decodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case ranges
         case today
+        case yesterday
         case week
         case month
         case year
@@ -47,11 +49,13 @@ struct ExternalToolStat: Decodable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         if let ranges = try c.decodeIfPresent(Ranges.self, forKey: .ranges) {
             today = ranges.today
+            yesterday = ranges.yesterday
             week = ranges.week
             month = ranges.month
             year = ranges.year
         } else {
             today = try c.decodeIfPresent(ExternalToolRange.self, forKey: .today)
+            yesterday = try c.decodeIfPresent(ExternalToolRange.self, forKey: .yesterday)
             week = try c.decodeIfPresent(ExternalToolRange.self, forKey: .week)
             month = try c.decodeIfPresent(ExternalToolRange.self, forKey: .month)
             year = try c.decodeIfPresent(ExternalToolRange.self, forKey: .year)
@@ -60,6 +64,7 @@ struct ExternalToolStat: Decodable, Sendable {
 
     private struct Ranges: Decodable {
         var today: ExternalToolRange?
+        var yesterday: ExternalToolRange?
         var week: ExternalToolRange?
         var month: ExternalToolRange?
         var year: ExternalToolRange?
