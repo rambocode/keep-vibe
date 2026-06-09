@@ -504,6 +504,7 @@ private struct HeatmapBody: View {
 
 // MARK: - 工具对比卡片
 
+@MainActor
 private struct AgentsOverviewSection: View {
     let state: AppState
 

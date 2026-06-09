@@ -2,6 +2,7 @@ import SwiftUI
 
 // MARK: - Settings View
 
+@MainActor
 struct SettingsView: View {
     @ObservedObject var state: AppState
     let onToggleAwake: (Bool) -> Void
