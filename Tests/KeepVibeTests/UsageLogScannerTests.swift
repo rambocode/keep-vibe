@@ -74,7 +74,7 @@ final class UsageLogScannerTests: XCTestCase {
         XCTAssertEqual(usage.claude.todayTokens, 15)
     }
 
-    func testClaudeDedupeAcrossFiles() throws {
+    func testClaudeDedupeAcrossFilesKeepsLatestUsage() throws {
         let roots = try makeRoots()
         try writeLines([
             claudeLine(id: "dup", timestamp: "2026-06-07T01:00:00.000Z", input: 10, output: 0)
@@ -85,7 +85,9 @@ final class UsageLogScannerTests: XCTestCase {
 
         let usage = UsageLogScanner.summarizeAll(now: date("2026-06-07T02:00:00.000Z"), roots: roots)
 
-        XCTAssertEqual(usage.claude.todayTokens, 10)
+        XCTAssertEqual(usage.claude.todayTokens, 99)
+        XCTAssertEqual(usage.claude.weekTokens, 99)
+        XCTAssertEqual(usage.dashboard.totalTokens, 99)
     }
 
     func testCachedEventsRebucketAcrossDayWeekAndMonth() throws {
@@ -200,6 +202,12 @@ final class ExternalUsageDecodingTests: XCTestCase {
     func testDecodesNestedRangesAndGrokTokenOnlyUsage() throws {
         let json = """
         {
+          "claude": {
+            "q5": 100.0,
+            "q5_reset": 1781100000,
+            "q7": 20.0,
+            "q7_reset": 1781200000
+          },
           "codex": {
             "ranges": {
               "today": {"in": 10, "out": 5, "reason": 2, "cost": 0.1, "sessions": 1}
@@ -225,6 +233,9 @@ final class ExternalUsageDecodingTests: XCTestCase {
 
         let usage = try JSONDecoder().decode(ExternalUsage.self, from: json)
 
+        XCTAssertEqual(usage.claude?.q5, 100.0)
+        XCTAssertEqual(usage.claude?.q5_reset, 1_781_100_000)
+        XCTAssertEqual(usage.claude?.q7, 20.0)
         XCTAssertEqual(usage.codex?.p5, 63.5)
         XCTAssertEqual(usage.codex?.r5, 1_781_000_000)
         XCTAssertEqual(usage.codex?.pw, 12.0)

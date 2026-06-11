@@ -71,8 +71,10 @@ struct ExternalToolStat: Decodable, Sendable {
     }
 }
 
-/// Claude 周配额（q7 = 已用百分比，q7_reset = Unix epoch 重置时间）。
+/// Claude 配额（q5/q7 = 已用百分比，*_reset = Unix epoch 重置时间）。
 struct ExternalClaudeQuota: Decodable, Sendable {
+    var q5: Double?
+    var q5_reset: Int?
     var q7: Double?
     var q7_reset: Int?
 }

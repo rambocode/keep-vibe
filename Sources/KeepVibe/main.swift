@@ -370,10 +370,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 state.lastUpdated   = Date()
                 state.awakeRemaining = keepAwakeManager.remaining
                 noteClaudeActivity(from: u.claude)
-                // 周配额进度条（Python 脚本提供）
-                if let q = e?.claude, let q7 = q.q7 {
-                    let at = q.q7_reset.map { Date(timeIntervalSince1970: TimeInterval($0)) }
-                    state.claude?.weekQuota = QuotaStat(usedFraction: q7 / 100.0, resetAt: at)
+                // 配额进度条（Python 脚本从本地 CLI / 桌面缓存提供）
+                if let q = e?.claude {
+                    if let q5 = q.q5 {
+                        let resetIn = q.q5_reset.map {
+                            max(0, Date(timeIntervalSince1970: TimeInterval($0)).timeIntervalSinceNow)
+                        }
+                        state.claude?.window = WindowStat(
+                            tokens: state.claude?.window?.tokens ?? 0,
+                            tokensPerMin: state.claude?.window?.tokensPerMin ?? 0,
+                            resetIn: resetIn,
+                            usedFraction: min(max(q5 / 100.0, 0), 1)
+                        )
+                    }
+                    if let q7 = q.q7 {
+                        let at = q.q7_reset.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                        state.claude?.weekQuota = QuotaStat(usedFraction: q7 / 100.0, resetAt: at)
+                    }
                 }
                 if let q = e?.codex, let pw = q.pw {
                     let at = q.rw.map { Date(timeIntervalSince1970: TimeInterval($0)) }

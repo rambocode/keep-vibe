@@ -245,9 +245,13 @@ struct MenuContentView: View {
                          resetIn: win.resetIn,
                          tint: tint)
             }
+            // 周剩余始终展示：有数据画进度条，无数据给出可解释的占位
+            // （数据源是 Claude 桌面端缓存的 /usage 响应，桌面端未运行时会取不到）
+            thinDivider
             if let wq = u.weekQuota {
-                thinDivider
                 weekQuotaRow(quota: wq, tint: tint)
+            } else {
+                weekQuotaMissingRow()
             }
         }
     }
@@ -329,6 +333,25 @@ struct MenuContentView: View {
                 }
             }
             MiniBar(value: max(0, pct), tint: pct <= 15 ? .red : tint)
+        }
+    }
+
+    // 周配额数据缺失时的占位行：保持 UI 一致，并说明如何恢复数据
+    func weekQuotaMissingRow() -> some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text("周剩余")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.tSecondary)
+                Spacer()
+                Text("暂无数据")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Theme.tTertiary)
+            }
+            Text("打开 Claude 桌面端可刷新周配额")
+                .font(.system(size: 9))
+                .foregroundStyle(Theme.tTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

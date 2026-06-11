@@ -101,6 +101,12 @@ private struct ClaudeEvent: Codable {
     var tokens: Int { inputTokens + outputTokens + cacheWriteTokens + cacheReadTokens }
 }
 
+private struct ClaudeEventRecord {
+    var event: ClaudeEvent
+    var filePath: String
+    var cwd: String?
+}
+
 private struct CodexEvent: Codable {
     var timestamp: TimeInterval
     var inputTokens: Int
@@ -467,7 +473,6 @@ private extension UsageLogScanner {
     static func summarizeClaude(files: [String: ClaudeFileCache], now: Date, cutoff: Date) -> AgentUsage {
         let bounds = timeBounds(now: now)
         let fiveMinAgo = now.addingTimeInterval(-5 * 60)
-        var seenIds = Set<String>()
         var todayCost = 0.0, yesterdayCost = 0.0, weekCost = 0.0, monthCost = 0.0, yearCost = 0.0
         var today = TokenBreakdown(), yesterday = TokenBreakdown(), week = TokenBreakdown(),
             month = TokenBreakdown(), year = TokenBreakdown()
@@ -475,11 +480,8 @@ private extension UsageLogScanner {
         var windowTimestamps = [Date]()
         var windowTokens = [Int]()
 
-        for event in files.values.flatMap(\.events).sorted(by: { $0.timestamp < $1.timestamp }) {
-            guard !event.dedupeKey.isEmpty,
-                  seenIds.insert(event.dedupeKey).inserted
-            else { continue }
-
+        for record in latestClaudeRecords(files: files) {
+            let event = record.event
             let ts = Date(timeIntervalSince1970: event.timestamp)
             guard ts >= cutoff else { continue }
 
@@ -624,7 +626,6 @@ private extension UsageLogScanner {
         fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.timeZone = .current
 
-        var seenIds = Set<String>()
         var totalTokens = 0
         var totalCost = 0.0
         var earliestDate: Date?
@@ -640,31 +641,28 @@ private extension UsageLogScanner {
         var dayProjects   = [String: Set<String>]()
 
         // Claude events
-        for (filePath, file) in claudeFiles {
-            let proj = file.cwd.flatMap { c -> String? in
+        for record in latestClaudeRecords(files: claudeFiles) {
+            let event = record.event
+            let proj = record.cwd.flatMap { c -> String? in
                 let n = URL(fileURLWithPath: c).lastPathComponent
                 return n.isEmpty ? nil : n
-            } ?? encodedProjectName(from: filePath)
+            } ?? encodedProjectName(from: record.filePath)
 
-            for event in file.events {
-                guard !event.dedupeKey.isEmpty,
-                      seenIds.insert(event.dedupeKey).inserted else { continue }
-                let ts = Date(timeIntervalSince1970: event.timestamp)
-                let day = fmt.string(from: ts)
-                let tok = event.tokens
-                totalTokens += tok; totalCost += event.cost
-                if earliestDate == nil || ts < earliestDate! { earliestDate = ts }
-                dayToCost[day, default: 0]     += event.cost
-                dayToByClaude[day, default: 0] += event.cost
-                let h = cal.component(.hour, from: ts)
-                hourTokens[h] += tok
-                let mk = event.model.isEmpty ? "claude" : event.model
-                modelTokens[mk, default: 0] += tok; modelCost[mk, default: 0] += event.cost
-                projectTokens[proj, default: 0] += tok; projectCost[proj, default: 0] += event.cost
-                let wd = cal.component(.weekday, from: ts)
-                if wd == 1 || wd == 7 { weekendTokens += tok }
-                dayProjects[day, default: []].insert(proj)
-            }
+            let ts = Date(timeIntervalSince1970: event.timestamp)
+            let day = fmt.string(from: ts)
+            let tok = event.tokens
+            totalTokens += tok; totalCost += event.cost
+            if earliestDate == nil || ts < earliestDate! { earliestDate = ts }
+            dayToCost[day, default: 0]     += event.cost
+            dayToByClaude[day, default: 0] += event.cost
+            let h = cal.component(.hour, from: ts)
+            hourTokens[h] += tok
+            let mk = event.model.isEmpty ? "claude" : event.model
+            modelTokens[mk, default: 0] += tok; modelCost[mk, default: 0] += event.cost
+            projectTokens[proj, default: 0] += tok; projectCost[proj, default: 0] += event.cost
+            let wd = cal.component(.weekday, from: ts)
+            if wd == 1 || wd == 7 { weekendTokens += tok }
+            dayProjects[day, default: []].insert(proj)
         }
 
         // Codex events
@@ -738,6 +736,23 @@ private extension UsageLogScanner {
     }
 
     // MARK: - Dashboard helpers
+
+    static func latestClaudeRecords(files: [String: ClaudeFileCache]) -> [ClaudeEventRecord] {
+        var latest = [String: ClaudeEventRecord]()
+        for (filePath, file) in files {
+            for event in file.events where !event.dedupeKey.isEmpty {
+                let record = ClaudeEventRecord(event: event, filePath: filePath, cwd: file.cwd)
+                if let existing = latest[event.dedupeKey] {
+                    if event.timestamp >= existing.event.timestamp {
+                        latest[event.dedupeKey] = record
+                    }
+                } else {
+                    latest[event.dedupeKey] = record
+                }
+            }
+        }
+        return latest.values.sorted { $0.event.timestamp < $1.event.timestamp }
+    }
 
     static func modelDisplayName(_ model: String) -> String {
         let m = model.lowercased()
