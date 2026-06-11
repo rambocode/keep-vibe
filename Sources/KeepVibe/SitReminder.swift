@@ -116,12 +116,17 @@ final class SitReminder {
 enum ReminderHUD {
     private static var panel: NSPanel?
 
-    static func show(title: String, body: String) {
+    static func show(title: String, body: String, requiresManualDismiss: Bool = false) {
         panel?.close()
 
         let width: CGFloat = 320
         let height: CGFloat = 80
-        let host = NSHostingView(rootView: ReminderHUDView(title: title, message: body))
+        let host = NSHostingView(rootView: ReminderHUDView(
+            title: title,
+            message: body,
+            requiresManualDismiss: requiresManualDismiss,
+            onClose: { dismissCurrent() }
+        ))
         host.frame = NSRect(x: 0, y: 0, width: width, height: height)
 
         let nextPanel = NSPanel(
@@ -150,25 +155,38 @@ enum ReminderHUD {
             nextPanel.animator().alphaValue = 1
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) {
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.4
-                nextPanel.animator().alphaValue = 0
-            }, completionHandler: {
-                Task { @MainActor in
-                    nextPanel.close()
-                    if panel === nextPanel {
-                        panel = nil
-                    }
-                }
-            })
+        if !requiresManualDismiss {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) {
+                dismiss(nextPanel)
+            }
         }
+    }
+
+    private static func dismissCurrent() {
+        guard let panel else { return }
+        dismiss(panel)
+    }
+
+    private static func dismiss(_ panelToClose: NSPanel) {
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.4
+            panelToClose.animator().alphaValue = 0
+        }, completionHandler: {
+            Task { @MainActor in
+                panelToClose.close()
+                if panel === panelToClose {
+                    panel = nil
+                }
+            }
+        })
     }
 }
 
 struct ReminderHUDView: View {
     let title: String
     let message: String
+    let requiresManualDismiss: Bool
+    let onClose: () -> Void
 
     var body: some View {
         HStack(spacing: 11) {
@@ -196,6 +214,18 @@ struct ReminderHUDView: View {
             }
 
             Spacer(minLength: 0)
+
+            if requiresManualDismiss {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Theme.tSecondary)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(Color.primary.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .help("关闭提醒")
+            }
         }
         .padding(12)
         .frame(width: 320, height: 80, alignment: .leading)

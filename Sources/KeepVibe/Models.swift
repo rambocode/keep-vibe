@@ -24,6 +24,7 @@ struct WindowStat {                      // Claude 的 5 小时窗口
     var tokens: Int = 0
     var tokensPerMin: Double = 0
     var resetIn: TimeInterval? = nil     // 距窗口重置剩余秒数
+    var resetAt: Date? = nil             // 窗口重置绝对时间
     var usedFraction: Double = 0         // 0..1 进度条
 }
 

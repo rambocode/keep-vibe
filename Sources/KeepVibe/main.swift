@@ -29,6 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var lastClaudeActivity: Date?
     private var lastClaudeActivitySignature: Int?
     private var idleReminderFired = false
+    private var resetReminderTimer: Timer?
+    private var scheduledResetReminderKeys = Set<String>()
+    private var firedResetReminderKeys = Set<String>()
 
     private static let claudeStatusColor = NSColor(red: 0.92, green: 0.52, blue: 0.40, alpha: 1)
     private static let codexStatusColor = NSColor(red: 0.42, green: 0.68, blue: 0.98, alpha: 1)
@@ -373,6 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 // 配额进度条（Python 脚本从本地 CLI / 桌面缓存提供）
                 if let q = e?.claude {
                     if let q5 = q.q5 {
+                        let resetAt = q.q5_reset.map { Date(timeIntervalSince1970: TimeInterval($0)) }
                         let resetIn = q.q5_reset.map {
                             max(0, Date(timeIntervalSince1970: TimeInterval($0)).timeIntervalSinceNow)
                         }
@@ -380,6 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                             tokens: state.claude?.window?.tokens ?? 0,
                             tokensPerMin: state.claude?.window?.tokensPerMin ?? 0,
                             resetIn: resetIn,
+                            resetAt: resetAt,
                             usedFraction: min(max(q5 / 100.0, 0), 1)
                         )
                     }
@@ -393,11 +398,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                     state.codex?.weekQuota = QuotaStat(usedFraction: pw / 100.0, resetAt: at)
                 }
                 if let q = e?.codex, let p5 = q.p5 {
-                    let resetIn = q.r5.map { max(0, Date(timeIntervalSince1970: TimeInterval($0)).timeIntervalSinceNow) }
+                    let resetAt = q.r5.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                    let resetIn = resetAt.map { max(0, $0.timeIntervalSinceNow) }
                     state.codex?.window = WindowStat(
                         tokens: state.codex?.window?.tokens ?? 0,
                         tokensPerMin: state.codex?.window?.tokensPerMin ?? 0,
                         resetIn: resetIn,
+                        resetAt: resetAt,
                         usedFraction: min(max(p5 / 100.0, 0), 1)
                     )
                 }
@@ -408,12 +415,106 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 state.opencode = e?.opencode.map { toolStatToAgentUsage($0) }
                 state.qoder    = e?.qoder.map    { toolStatToAgentUsage($0) }
                 updateStatusTitle()
+                updateResetReminderSchedule()
             }
             refreshTask = nil
             if refreshPending {
                 refreshPending = false
                 refresh()
             }
+        }
+    }
+
+    // MARK: - Reset reminders
+
+    private struct ResetReminderTarget {
+        var kind: ToolKind
+        var resetAt: Date
+    }
+
+    private func updateResetReminderSchedule(now: Date = Date()) {
+        resetReminderTimer?.invalidate()
+        resetReminderTimer = nil
+
+        let targets = resetReminderTargets()
+        let activeKeys = Set(targets.map(resetReminderKey))
+        scheduledResetReminderKeys.formIntersection(activeKeys)
+        firedResetReminderKeys.formIntersection(activeKeys)
+
+        let dueTargets = targets.filter { target in
+            let key = resetReminderKey(target)
+            return target.resetAt <= now
+                && scheduledResetReminderKeys.contains(key)
+                && !firedResetReminderKeys.contains(key)
+        }
+        if !dueTargets.isEmpty {
+            showResetReminder(for: dueTargets)
+            dueTargets.forEach { firedResetReminderKeys.insert(resetReminderKey($0)) }
+        }
+
+        let futureTargets = targets
+            .filter { target in
+                let key = resetReminderKey(target)
+                return target.resetAt > now && !firedResetReminderKeys.contains(key)
+            }
+        guard let nextResetAt = futureTargets.map(\.resetAt).min() else { return }
+
+        let nextTargets = futureTargets.filter {
+            abs($0.resetAt.timeIntervalSince(nextResetAt)) < 1
+        }
+        nextTargets.forEach { scheduledResetReminderKeys.insert(resetReminderKey($0)) }
+
+        let timer = Timer(fireAt: nextResetAt, interval: 0, target: self,
+                          selector: #selector(resetReminderTimerFired),
+                          userInfo: nil, repeats: false)
+        RunLoop.main.add(timer, forMode: .common)
+        resetReminderTimer = timer
+    }
+
+    @objc private func resetReminderTimerFired() {
+        updateResetReminderSchedule()
+    }
+
+    private func resetReminderTargets() -> [ResetReminderTarget] {
+        ToolKind.allCases.compactMap { kind in
+            guard let resetAt = usage(for: kind)?.window?.resetAt else { return nil }
+            return ResetReminderTarget(kind: kind, resetAt: resetAt)
+        }
+    }
+
+    private func usage(for kind: ToolKind) -> AgentUsage? {
+        switch kind {
+        case .claude: return state.claude
+        case .codex: return state.codex
+        case .gemini: return state.gemini
+        case .grok: return state.grok
+        case .aider: return state.aider
+        case .openclaw: return state.openclaw
+        case .opencode: return state.opencode
+        case .qoder: return state.qoder
+        }
+    }
+
+    private func resetReminderKey(_ target: ResetReminderTarget) -> String {
+        "\(target.kind.rawValue):\(Int(target.resetAt.timeIntervalSince1970))"
+    }
+
+    private func showResetReminder(for targets: [ResetReminderTarget]) {
+        let names = targets
+            .sorted { $0.kind.rawValue < $1.kind.rawValue }
+            .map { resetReminderDisplayName(for: $0.kind) }
+            .joined(separator: "、")
+        ReminderHUD.show(
+            title: "5h 配额已重置",
+            body: "\(names) 可以继续使用",
+            requiresManualDismiss: true
+        )
+    }
+
+    private func resetReminderDisplayName(for kind: ToolKind) -> String {
+        switch kind {
+        case .claude: return "Claude Code"
+        default: return kind.displayName
         }
     }
 

@@ -39,7 +39,7 @@ chmod +x "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 find "${BUILD_DIR}" -maxdepth 1 -type d -name "*.resources" -exec cp -R {} "${APP_BUNDLE}/Contents/Resources/" \;
 
 if [[ -d "${APP_RESOURCES}" ]]; then
-  find "${APP_RESOURCES}" -maxdepth 1 -type f \( -name "*.png" -o -name "*.icns" \) -exec cp {} "${APP_BUNDLE}/Contents/Resources/" \;
+  find "${APP_RESOURCES}" -maxdepth 1 -type f -exec cp {} "${APP_BUNDLE}/Contents/Resources/" \;
 fi
 
 if [[ -f "${APP_ICON}" ]]; then

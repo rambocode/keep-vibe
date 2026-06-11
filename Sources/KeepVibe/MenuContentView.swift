@@ -242,7 +242,7 @@ struct MenuContentView: View {
                 thinDivider
                 quotaRow(title: "5h 剩余",
                          pct: (1 - win.usedFraction) * 100,
-                         resetIn: win.resetIn,
+                         resetAt: win.resetAt,
                          tint: tint)
             }
             // 周剩余始终展示：有数据画进度条，无数据给出可解释的占位
@@ -283,7 +283,7 @@ struct MenuContentView: View {
                 thinDivider
                 quotaRow(title: "5h 剩余",
                          pct: (1 - win.usedFraction) * 100,
-                         resetIn: win.resetIn,
+                         resetAt: win.resetAt,
                          tint: tint)
             }
             if let wq = u.weekQuota {
@@ -448,7 +448,7 @@ struct MenuContentView: View {
         }
     }
 
-    func quotaRow(title: String, pct: Double, resetIn: TimeInterval?, tint: Color) -> some View {
+    func quotaRow(title: String, pct: Double, resetAt: Date?, tint: Color) -> some View {
         VStack(spacing: 4) {
             HStack {
                 Text(title).font(.system(size: 11)).foregroundStyle(Theme.tSecondary)
@@ -456,8 +456,8 @@ struct MenuContentView: View {
                 Text(String(format: "%.0f%%", max(0, pct)))
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundStyle(pct <= 15 ? AnyShapeStyle(.red) : AnyShapeStyle(Theme.tPrimary))
-                if let r = resetIn {
-                    Text("· \(formatResetIn(r))")
+                if let resetAt {
+                    Text("· \(resetDateStr(resetAt))")
                         .font(.system(size: 9.5, design: .monospaced))
                         .foregroundStyle(Theme.tTertiary)
                 }
@@ -470,9 +470,4 @@ struct MenuContentView: View {
         Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 1)
     }
 
-    private func formatResetIn(_ seconds: TimeInterval) -> String {
-        let total = Int(max(0, seconds))
-        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
-        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
-    }
 }

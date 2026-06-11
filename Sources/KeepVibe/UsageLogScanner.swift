@@ -917,6 +917,7 @@ private extension UsageLogScanner {
             tokens: block.tokens,
             tokensPerMin: tokPerMin,
             resetIn: resetIn > 0 ? resetIn : nil,
+            resetAt: blockEnd,
             usedFraction: usedFrac
         )
     }
