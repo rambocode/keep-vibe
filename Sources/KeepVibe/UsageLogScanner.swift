@@ -63,6 +63,40 @@ enum UsageLogScanner {
         }
         return summarizeCodex(files: cache.codex, now: now, cutoff: cutoff)
     }
+
+    /// 清理缓存中的「今日」事件，保留历史；标记相关文件待下次刷新重扫今日段落。
+    @discardableResult
+    static func purgeTodayFromCache(now: Date = Date(), roots: UsageLogRoots = .default) -> Bool {
+        let url = roots.cacheFile
+        var cache = loadCache(from: url)
+        guard !cache.claude.isEmpty || !cache.codex.isEmpty else { return false }
+
+        let dayStart = timeBounds(now: now).day.timeIntervalSince1970
+        var changed = false
+
+        var nextClaude = cache.claude
+        for (path, var file) in cache.claude {
+            if purgeTodayEvents(in: &file, dayStart: dayStart) {
+                nextClaude[path] = file
+                changed = true
+            }
+        }
+        cache.claude = nextClaude
+
+        var nextCodex = cache.codex
+        for (path, var file) in cache.codex {
+            if purgeTodayEvents(in: &file, dayStart: dayStart) {
+                nextCodex[path] = file
+                changed = true
+            }
+        }
+        cache.codex = nextCodex
+
+        if changed {
+            saveCache(cache, to: url)
+        }
+        return changed
+    }
 }
 
 // MARK: - Cache model
@@ -149,6 +183,22 @@ private extension UsageLogScanner {
         } catch {
             // 缓存失败不影响本次展示；下次刷新会重新扫描。
         }
+    }
+
+    static func purgeTodayEvents(in file: inout ClaudeFileCache, dayStart: TimeInterval) -> Bool {
+        let before = file.events.count
+        file.events.removeAll { $0.timestamp >= dayStart }
+        guard file.events.count != before else { return false }
+        file.mtime = -1
+        return true
+    }
+
+    static func purgeTodayEvents(in file: inout CodexFileCache, dayStart: TimeInterval) -> Bool {
+        let before = file.events.count
+        file.events.removeAll { $0.timestamp >= dayStart }
+        guard file.events.count != before else { return false }
+        file.mtime = -1
+        return true
     }
 }
 

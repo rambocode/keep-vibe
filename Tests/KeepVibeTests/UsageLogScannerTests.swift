@@ -137,6 +137,27 @@ final class UsageLogScannerTests: XCTestCase {
         XCTAssertEqual(usage.codex.weekTokens, 46)
     }
 
+    func testPurgeTodayFromCacheKeepsHistoricalEvents() throws {
+        let roots = try makeRoots()
+        let claudeFile = roots.claudeProjects.appendingPathComponent("project/session.jsonl")
+        let now = date("2026-06-08T10:00:00.000+08:00")
+
+        try writeLines([
+            claudeLine(id: "yest", timestamp: "2026-06-07T12:00:00.000+08:00", input: 20, output: 3),
+            claudeLine(id: "today", timestamp: "2026-06-08T09:00:00.000+08:00", input: 11, output: 1),
+        ], to: claudeFile)
+
+        let before = UsageLogScanner.summarizeAll(now: now, roots: roots)
+        XCTAssertEqual(before.claude.yesterdayTokens, 23)
+        XCTAssertEqual(before.claude.todayTokens, 12)
+
+        XCTAssertTrue(UsageLogScanner.purgeTodayFromCache(now: now, roots: roots))
+
+        let after = UsageLogScanner.summarizeAll(now: now, roots: roots)
+        XCTAssertEqual(after.claude.yesterdayTokens, 23)
+        XCTAssertEqual(after.claude.todayTokens, 12)
+    }
+
     private func makeRoots() throws -> UsageLogRoots {
         let claude = tempRoot.appendingPathComponent("claude/projects")
         let codex = tempRoot.appendingPathComponent("codex/sessions")
@@ -244,6 +265,84 @@ final class ExternalUsageDecodingTests: XCTestCase {
         XCTAssertEqual(usage.grok?.today?.cost, 0)
         XCTAssertEqual(usage.grok?.yesterday?.inputTokens, 1111)
         XCTAssertEqual(usage.grok?.year?.inputTokens, 4567)
+    }
+}
+
+final class AppDataMigrationTests: XCTestCase {
+    func testCurrentBuildTokenIsNonEmpty() {
+        XCTAssertFalse(AppDataMigration.currentBuildToken().isEmpty)
+    }
+
+    func testClearTodayUsageCachesDoesNotThrow() {
+        AppDataMigration.clearTodayUsageCaches()
+    }
+}
+
+final class ResetReminderPlannerTests: XCTestCase {
+    func testDueTargetsIncludePastResetNotYetFired() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let targets = [
+            ResetReminderPlanner.Target(key: "claude:900", resetAt: Date(timeIntervalSince1970: 900)),
+            ResetReminderPlanner.Target(key: "codex:1100", resetAt: Date(timeIntervalSince1970: 1_100)),
+        ]
+
+        let due = ResetReminderPlanner.dueTargets(targets, firedKeys: [], now: now)
+
+        XCTAssertEqual(due.map(\.key), ["claude:900"])
+        XCTAssertEqual(
+            ResetReminderPlanner.nextFireDate(targets, firedKeys: [], now: now)?.timeIntervalSince1970,
+            1_100
+        )
+    }
+
+    func testDueTargetsSkipAlreadyFiredKeys() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let targets = [
+            ResetReminderPlanner.Target(key: "claude:1000", resetAt: Date(timeIntervalSince1970: 1_000)),
+        ]
+
+        let due = ResetReminderPlanner.dueTargets(targets, firedKeys: ["claude:1000"], now: now)
+
+        XCTAssertTrue(due.isEmpty)
+    }
+
+    func testNextFireDateUsesNearestFutureReset() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let targets = [
+            ResetReminderPlanner.Target(key: "claude:1500", resetAt: Date(timeIntervalSince1970: 1_500)),
+            ResetReminderPlanner.Target(key: "codex:1800", resetAt: Date(timeIntervalSince1970: 1_800)),
+        ]
+
+        XCTAssertEqual(
+            ResetReminderPlanner.nextFireDate(targets, firedKeys: [], now: now)?.timeIntervalSince1970,
+            1_500
+        )
+    }
+
+    func testMissedTargetWhenResetAtAdvancesAfterDueTime() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let missed = ResetReminderPlanner.missedTarget(
+            kind: "claude",
+            previousResetAt: Date(timeIntervalSince1970: 1_000),
+            currentResetAt: Date(timeIntervalSince1970: 3_000),
+            now: now
+        )
+
+        XCTAssertEqual(missed?.key, "claude:1000")
+        XCTAssertEqual(missed?.resetAt.timeIntervalSince1970, 1_000)
+    }
+
+    func testMissedTargetNilWhenResetAtUnchanged() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let resetAt = Date(timeIntervalSince1970: 1_000)
+        XCTAssertNil(
+            ResetReminderPlanner.missedTarget(
+                kind: "claude",
+                previousResetAt: resetAt,
+                currentResetAt: resetAt,
+                now: now
+            )
+        )
     }
 }
 

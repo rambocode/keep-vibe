@@ -116,3 +116,5 @@ if [[ -n "${CODE_SIGN_IDENTITY}" ]]; then
 fi
 
 echo "Created DMG package: ${OUTPUT_DMG}"
+echo ""
+echo "Install: drag KeepVibe.app to /Applications, quit any running KeepVibe, then launch from Applications."

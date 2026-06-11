@@ -30,7 +30,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var lastClaudeActivitySignature: Int?
     private var idleReminderFired = false
     private var resetReminderTimer: Timer?
-    private var scheduledResetReminderKeys = Set<String>()
     private var firedResetReminderKeys = Set<String>()
 
     private static let claudeStatusColor = NSColor(red: 0.92, green: 0.52, blue: 0.40, alpha: 1)
@@ -116,7 +115,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         setupIdleReminder()
         sitReminder.updateRunning()
 
-        // 立即刷新一次
+        AppDataMigration.migrateIfNeeded()
+        firedResetReminderKeys = ResetReminderStorage.loadFiredKeys()
+        setupResetReminderWakeObserver()
+
+        // 立即刷新一次；其余时机为打开 popover
         refresh()
     }
 
@@ -432,47 +435,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         var resetAt: Date
     }
 
+    private func setupResetReminderWakeObserver() {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateResetReminderSchedule()
+            }
+        }
+        center.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateResetReminderSchedule()
+            }
+        }
+    }
+
     private func updateResetReminderSchedule(now: Date = Date()) {
         resetReminderTimer?.invalidate()
         resetReminderTimer = nil
 
-        let targets = resetReminderTargets()
-        let activeKeys = Set(targets.map(resetReminderKey))
-        scheduledResetReminderKeys.formIntersection(activeKeys)
-        firedResetReminderKeys.formIntersection(activeKeys)
-
-        let dueTargets = targets.filter { target in
-            let key = resetReminderKey(target)
-            return target.resetAt <= now
-                && scheduledResetReminderKeys.contains(key)
-                && !firedResetReminderKeys.contains(key)
+        var targets = resetReminderTargets()
+        for kind in ToolKind.allCases {
+            guard let current = usage(for: kind)?.window?.resetAt else { continue }
+            if let previous = ResetReminderStorage.loadLastResetAt(kind: kind),
+               let missed = ResetReminderPlanner.missedTarget(
+                   kind: kind.rawValue,
+                   previousResetAt: previous,
+                   currentResetAt: current,
+                   now: now
+               ),
+               !firedResetReminderKeys.contains(missed.key),
+               !targets.contains(where: { resetReminderKey($0) == missed.key }) {
+                targets.append(ResetReminderTarget(kind: kind, resetAt: missed.resetAt))
+            }
+            ResetReminderStorage.saveLastResetAt(kind: kind, date: current)
         }
+
+        let plannerTargets = targets.map {
+            ResetReminderPlanner.Target(key: resetReminderKey($0), resetAt: $0.resetAt)
+        }
+        let activeKeys = Set(plannerTargets.map(\.key))
+        firedResetReminderKeys.formIntersection(activeKeys)
+        ResetReminderStorage.saveFiredKeys(firedResetReminderKeys)
+
+        let dueKeys = Set(
+            ResetReminderPlanner.dueTargets(plannerTargets, firedKeys: firedResetReminderKeys, now: now)
+                .map(\.key)
+        )
+        let dueTargets = targets.filter { dueKeys.contains(resetReminderKey($0)) }
         if !dueTargets.isEmpty {
             showResetReminder(for: dueTargets)
             dueTargets.forEach { firedResetReminderKeys.insert(resetReminderKey($0)) }
+            ResetReminderStorage.saveFiredKeys(firedResetReminderKeys)
+            // 重置后刷新配额，拿到新的 q5 / resetAt
+            refresh(queueIfRunning: true)
         }
 
-        let futureTargets = targets
-            .filter { target in
-                let key = resetReminderKey(target)
-                return target.resetAt > now && !firedResetReminderKeys.contains(key)
+        guard let nextResetAt = ResetReminderPlanner.nextFireDate(
+            plannerTargets, firedKeys: firedResetReminderKeys, now: now
+        ) else { return }
+
+        let delay = max(0.05, nextResetAt.timeIntervalSince(now))
+        let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateResetReminderSchedule()
             }
-        guard let nextResetAt = futureTargets.map(\.resetAt).min() else { return }
-
-        let nextTargets = futureTargets.filter {
-            abs($0.resetAt.timeIntervalSince(nextResetAt)) < 1
         }
-        nextTargets.forEach { scheduledResetReminderKeys.insert(resetReminderKey($0)) }
-
-        let timer = Timer(fireAt: nextResetAt, interval: 0, target: self,
-                          selector: #selector(resetReminderTimerFired),
-                          userInfo: nil, repeats: false)
         RunLoop.main.add(timer, forMode: .common)
         resetReminderTimer = timer
-    }
-
-    @objc private func resetReminderTimerFired() {
-        updateResetReminderSchedule()
     }
 
     private func resetReminderTargets() -> [ResetReminderTarget] {
@@ -635,6 +672,11 @@ private func toolStatToAgentUsage(_ stat: ExternalToolStat) -> AgentUsage {
 }
 
 // MARK: - Debug dump (核对数据用：KeepVibe --dump)
+
+if CommandLine.arguments.contains("--purge-today-cache") {
+    AppDataMigration.clearTodayUsageCaches()
+    exit(0)
+}
 
 if CommandLine.arguments.contains("--dump") {
     let now = Date()
