@@ -1268,6 +1268,11 @@ def _scan_claude_plan_raw():
             j = json.loads(raw[raw.find(b"{"):raw.rfind(b"}") + 1])
         except Exception:
             return None
+    return _map_quota_json(j)
+
+
+def _map_quota_json(j):
+    # 官方 /usage 响应(桌面端缓存或 OAuth 接口同构)→ q5/q7/q7_opus 字段
     fh_ = j.get("five_hour") or {}
     sd = j.get("seven_day") or {}
     so = j.get("seven_day_opus") or {}      # Opus 专属周配额（Max 套餐单独计，可能为 null）
@@ -1281,16 +1286,82 @@ def _scan_claude_plan_raw():
     }
 
 
-# Claude 额度只存在 Claude Desktop 的易失缓存条目里,缓存被淘汰/重写的瞬间会读不到。
-# 本次取到的字段优先;缺失字段用回退缓存按各自 reset 时间逐项补齐(reset 已过则丢弃,避免跨 reset 陈旧)。
-_QUOTA_FALLBACK_TTL = 21600   # 6h:桌面端长时间未刷新时仍能兜底,真正陈旧由 *_reset 拦截
+# 首选数据源:用 Claude Code 自己的 OAuth 凭据直接调官方 /usage 接口,无需打开桌面端。
+# token 由 Claude Code 在 macOS Keychain(或 ~/.claude/.credentials.json)维护并自动续期。
+_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+
+
+def _read_claude_oauth_token():
+    import subprocess
+    import time
+    raw = None
+    # macOS: 凭据存在登录钥匙串
+    if sys.platform == "darwin":
+        try:
+            p = subprocess.run(
+                ["security", "find-generic-password",
+                 "-s", "Claude Code-credentials", "-w"],
+                capture_output=True, text=True, timeout=4,
+            )
+            if p.returncode == 0 and p.stdout.strip():
+                raw = p.stdout.strip()
+        except Exception:
+            raw = None
+    # 回退:凭据文件(部分平台/旧版本)
+    if raw is None:
+        try:
+            with open(os.path.join(HOME, ".claude", ".credentials.json")) as fh:
+                raw = fh.read()
+        except OSError:
+            return None
+    try:
+        o = json.loads(raw)
+    except Exception:
+        return None
+    o = o.get("claudeAiOauth", o)
+    tok = o.get("accessToken")
+    if not tok:
+        return None
+    exp = o.get("expiresAt")          # 毫秒 epoch;过期则放弃(交回退兜底,不在此做刷新)
+    if isinstance(exp, (int, float)) and exp <= time.time() * 1000:
+        return None
+    return tok
+
+
+def _fetch_claude_quota_oauth():
+    import urllib.request
+    tok = _read_claude_oauth_token()
+    if not tok:
+        return None
+    req = urllib.request.Request(_OAUTH_USAGE_URL, headers={
+        "Authorization": "Bearer " + tok,
+        "anthropic-beta": "oauth-2025-04-20",
+        "anthropic-version": "2023-06-01",
+        "User-Agent": "keepvibe",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            j = json.loads(resp.read())
+    except Exception:
+        return None
+    r = _map_quota_json(j)
+    if r.get("q5") is None and r.get("q7") is None:
+        return None
+    return r
+
+
+# Claude 额度的桌面端缓存来源:只存在 Claude Desktop 的易失缓存条目里,缓存被淘汰/重写的瞬间会读不到。
+# OAuth 接口取到则优先;否则回退桌面端缓存。本次取到的字段优先;
+# 缺失字段用回退缓存按各自 reset 时间逐项补齐(reset 已过则丢弃,避免跨 reset 陈旧)。
+_QUOTA_FALLBACK_TTL = 21600   # 6h:两个实时源都失败时仍能兜底,真正陈旧由 *_reset 拦截
 
 def scan_claude_plan():
     import tempfile
     import time
     cache = os.path.join(tempfile.gettempdir(), "_tokei_claude_quota.json")
     now = time.time()
-    raw = _scan_claude_plan_raw() or {}
+    # 首选 OAuth 接口(不依赖桌面端),失败再回退桌面端 Chromium 缓存
+    raw = _fetch_claude_quota_oauth() or _scan_claude_plan_raw() or {}
     got_live = raw.get("q5") is not None or raw.get("q7") is not None
 
     fb = None

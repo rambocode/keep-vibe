@@ -1,0 +1,94 @@
+{
+  "v": 3,
+  "name": "My App",
+  "source": "clipart",
+  "clipart": {
+    "id": "fluent-mdl2:flame-solid",
+    "svg": "<path fill=\"currentColor\" d=\"M1821 1315q0 102-26 195t-73 175t-115 149t-148 114t-175 74t-196 26q-102 0-195-26t-175-73t-149-115t-114-148t-74-175t-26-196q0-99 25-195t79-181q21 42 45 83t55 73t72 53t93 20q46 0 86-17t70-48t47-70t18-86q0-39-12-70t-34-63q-26-37-45-72t-33-71t-19-76t-7-86q0-95 33-182t93-155t140-114t176-58q15 214 100 392t234 331q122 125 186 271t64 321\"/>",
+    "vb": "0 0 2048 2048"
+  },
+  "emoji": {
+    "char": "❓"
+  },
+  "text": {
+    "value": "A",
+    "font": "Inter",
+    "weight": 800,
+    "ls": 0,
+    "lh": 1.1,
+    "curve": "none",
+    "curveAmt": 30
+  },
+  "image": {
+    "data": null,
+    "mode": "original"
+  },
+  "svg": {
+    "code": null
+  },
+  "tint": {
+    "mode": "solid",
+    "c1": "#38bdf8",
+    "c2": "#ffd166"
+  },
+  "fg": {
+    "scale": 0.64,
+    "dx": 0,
+    "dy": 0,
+    "rot": 0,
+    "flip": false
+  },
+  "bg": {
+    "type": "linear",
+    "c1": "#ffffff",
+    "c2": "#ffffff",
+    "angle": 325,
+    "image": null,
+    "pattern": "none",
+    "patSize": 12,
+    "patOp": 0.12134149451034205,
+    "noise": 0
+  },
+  "mask": {
+    "type": "square",
+    "radius": 22,
+    "pad": 0,
+    "custom": null
+  },
+  "fx": {
+    "shadow": {
+      "mode": "none",
+      "x": 0,
+      "y": 4,
+      "blur": 10,
+      "op": 0.1448779330001645,
+      "color": "#000000"
+    },
+    "stroke": {
+      "on": false,
+      "w": 4,
+      "color": "#1e1b4b"
+    },
+    "glow": {
+      "on": false,
+      "str": 0.5,
+      "color": "#ffffff"
+    },
+    "gloss": "none",
+    "border": false
+  },
+  "layers": {
+    "fg": true,
+    "bg": true,
+    "badge": true
+  },
+  "badge": {
+    "on": false,
+    "style": "ribbon",
+    "text": "NEW",
+    "pos": "tr",
+    "size": 0.3,
+    "bg": "#ef4444",
+    "fg": "#ffffff"
+  }
+}

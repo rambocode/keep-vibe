@@ -12,6 +12,9 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 if [[ -n "${BUILD_DIR+x}" ]]; then
   BUILD_DIR="${BUILD_DIR}"
 else
+  # --show-bin-path 只打印路径、不触发编译，必须先真正编译 release，
+  # 否则会把上一次留下的旧二进制打进包里（导致 dmg 与 swift run 不一致）。
+  swift build -c release
   BUILD_DIR="$(swift build -c release --show-bin-path)"
 fi
 BINARY_PATH="${BUILD_DIR}/${APP_NAME}"

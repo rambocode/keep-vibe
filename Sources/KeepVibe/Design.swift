@@ -106,6 +106,7 @@ enum Theme {
     static let openclaw = Color(red: 0.85, green: 0.45, blue: 0.68)   // 玫红
     static let opencode = Color(red: 0.55, green: 0.75, blue: 0.90)   // 天蓝灰
     static let qoder    = Color(red: 0.90, green: 0.75, blue: 0.35)   // 琥珀金
+    static let quotaBar = Color(red: 0.30, green: 0.78, blue: 0.50)   // 配额进度条统一绿
 
     static let panelWidth: CGFloat = 322
     static let cardRadius: CGFloat = 16

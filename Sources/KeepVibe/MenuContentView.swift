@@ -239,7 +239,8 @@ struct MenuContentView: View {
                 tint: tint
             )
             // 5h 与周剩余始终展示：有官方数据画进度条，无则给可解释占位
-            // （数据源是 Claude 桌面端缓存的 /usage 响应，桌面端未运行/重写瞬间会取不到）
+            // （首选 Claude Code 的 OAuth 凭据直连官方 /usage，凭据过期/未登录时取不到，
+            //   回退桌面端缓存的 /usage 响应）
             thinDivider
             if let win = u.window {
                 quotaRow(title: "5h 剩余",
@@ -339,12 +340,12 @@ struct MenuContentView: View {
                         .foregroundStyle(Theme.tTertiary)
                 }
             }
-            MiniBar(value: max(0, pct), tint: pct <= 15 ? .red : tint)
+            MiniBar(value: max(0, pct), tint: pct <= 15 ? .red : Theme.quotaBar)
         }
     }
 
     // 通用配额缺失占位行：标题 + 暂无数据 + 恢复提示（5h / 周共用，保持 UI 一致）
-    func quotaMissingRow(title: String, hint: String = "打开 Claude 桌面端可刷新") -> some View {
+    func quotaMissingRow(title: String, hint: String = "登录 Claude Code 后可刷新") -> some View {
         VStack(spacing: 4) {
             HStack {
                 Text(title)
@@ -364,7 +365,7 @@ struct MenuContentView: View {
 
     // 周配额缺失占位（复用通用行，沿用原提示文案）
     func weekQuotaMissingRow() -> some View {
-        quotaMissingRow(title: "周剩余", hint: "打开 Claude 桌面端可刷新周配额")
+        quotaMissingRow(title: "周剩余", hint: "登录 Claude Code 后可刷新周配额")
     }
 
     private func resetDateStr(_ date: Date) -> String {
@@ -474,7 +475,7 @@ struct MenuContentView: View {
                         .foregroundStyle(Theme.tTertiary)
                 }
             }
-            MiniBar(value: max(0, pct), tint: pct <= 15 ? .red : tint)
+            MiniBar(value: max(0, pct), tint: pct <= 15 ? .red : Theme.quotaBar)
         }
     }
 
