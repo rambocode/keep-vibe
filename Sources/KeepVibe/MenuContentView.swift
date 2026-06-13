@@ -238,20 +238,27 @@ struct MenuContentView: View {
                 ],
                 tint: tint
             )
+            // 5h 与周剩余始终展示：有官方数据画进度条，无则给可解释占位
+            // （数据源是 Claude 桌面端缓存的 /usage 响应，桌面端未运行/重写瞬间会取不到）
+            thinDivider
             if let win = u.window {
-                thinDivider
                 quotaRow(title: "5h 剩余",
                          pct: (1 - win.usedFraction) * 100,
                          resetAt: win.resetAt,
                          tint: tint)
+            } else {
+                quotaMissingRow(title: "5h 剩余")
             }
-            // 周剩余始终展示：有数据画进度条，无数据给出可解释的占位
-            // （数据源是 Claude 桌面端缓存的 /usage 响应，桌面端未运行时会取不到）
             thinDivider
             if let wq = u.weekQuota {
                 weekQuotaRow(quota: wq, tint: tint)
             } else {
                 weekQuotaMissingRow()
+            }
+            // Opus 专属周配额：仅当官方下发该字段时展示（Max 套餐，常缺）
+            if let owq = u.opusWeekQuota {
+                thinDivider
+                weekQuotaRow(quota: owq, title: "Opus 周剩余", tint: tint)
             }
         }
     }
@@ -315,11 +322,11 @@ struct MenuContentView: View {
 
     // MARK: - 周配额行（进度条 + 绝对重置时间）
 
-    func weekQuotaRow(quota: QuotaStat, tint: Color) -> some View {
+    func weekQuotaRow(quota: QuotaStat, title: String = "周剩余", tint: Color) -> some View {
         let pct = (1 - quota.usedFraction) * 100
         return VStack(spacing: 4) {
             HStack {
-                Text("周剩余")
+                Text(title)
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.tSecondary)
                 Spacer()
@@ -336,11 +343,11 @@ struct MenuContentView: View {
         }
     }
 
-    // 周配额数据缺失时的占位行：保持 UI 一致，并说明如何恢复数据
-    func weekQuotaMissingRow() -> some View {
+    // 通用配额缺失占位行：标题 + 暂无数据 + 恢复提示（5h / 周共用，保持 UI 一致）
+    func quotaMissingRow(title: String, hint: String = "打开 Claude 桌面端可刷新") -> some View {
         VStack(spacing: 4) {
             HStack {
-                Text("周剩余")
+                Text(title)
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.tSecondary)
                 Spacer()
@@ -348,11 +355,16 @@ struct MenuContentView: View {
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(Theme.tTertiary)
             }
-            Text("打开 Claude 桌面端可刷新周配额")
+            Text(hint)
                 .font(.system(size: 9))
                 .foregroundStyle(Theme.tTertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    // 周配额缺失占位（复用通用行，沿用原提示文案）
+    func weekQuotaMissingRow() -> some View {
+        quotaMissingRow(title: "周剩余", hint: "打开 Claude 桌面端可刷新周配额")
     }
 
     private func resetDateStr(_ date: Date) -> String {

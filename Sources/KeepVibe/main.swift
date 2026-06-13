@@ -22,6 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var refreshTask: Task<Void, Never>?
     private var refreshPending = false
     private var refreshGeneration: Int = 0
+    // Claude 官方配额粘性快照：桌面端缓存原地重写瞬间会读不到，用上次成功值兜底避免 UI 闪烁
+    private var lastClaudeWindow: WindowStat?
+    private var lastClaudeWeekQuota: QuotaStat?
+    private var lastClaudeOpusWeekQuota: QuotaStat?
+    private var quotaRefreshTimer: Timer?
 
     // 空闲提醒：监听 idleReminderMinutes，距上次 Claude 活动超阈值时发通知
     private var idleReminderTimer: Timer?
@@ -119,8 +124,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         firedResetReminderKeys = ResetReminderStorage.loadFiredKeys()
         setupResetReminderWakeObserver()
 
-        // 立即刷新一次；其余时机为打开 popover
+        // 立即刷新一次；并启动周期后台刷新（保持官方配额新鲜）
         refresh()
+        startQuotaRefreshTimer()
     }
 
     private func configureStatusBarButton(_ button: NSStatusBarButton) {
@@ -346,6 +352,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         awakeRemainingTimer = timer
     }
 
+    // 粘性配额是否仍有效：无 reset 时间视为有效；有则须未过期（窗口未重置）
+    private func quotaStillValid(_ resetAt: Date?, _ now: Date) -> Bool {
+        guard let resetAt else { return true }
+        return resetAt > now
+    }
+
+    // 周期后台刷新官方配额。桌面端每 ~10min 刷新 /usage；~150s 轮询及时捕获并保持粘性新鲜。
+    private func startQuotaRefreshTimer() {
+        quotaRefreshTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: 150, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refresh(queueIfRunning: true)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        quotaRefreshTimer = timer
+    }
+
     private func refresh(queueIfRunning: Bool = false) {
         guard refreshTask == nil else {
             if queueIfRunning {
@@ -376,25 +400,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 state.lastUpdated   = Date()
                 state.awakeRemaining = keepAwakeManager.remaining
                 noteClaudeActivity(from: u.claude)
-                // 配额进度条（Python 脚本从本地 CLI / 桌面缓存提供）
-                if let q = e?.claude {
-                    if let q5 = q.q5 {
-                        let resetAt = q.q5_reset.map { Date(timeIntervalSince1970: TimeInterval($0)) }
-                        let resetIn = q.q5_reset.map {
-                            max(0, Date(timeIntervalSince1970: TimeInterval($0)).timeIntervalSinceNow)
-                        }
-                        state.claude?.window = WindowStat(
-                            tokens: state.claude?.window?.tokens ?? 0,
-                            tokensPerMin: state.claude?.window?.tokensPerMin ?? 0,
-                            resetIn: resetIn,
-                            resetAt: resetAt,
-                            usedFraction: min(max(q5 / 100.0, 0), 1)
-                        )
-                    }
-                    if let q7 = q.q7 {
-                        let at = q.q7_reset.map { Date(timeIntervalSince1970: TimeInterval($0)) }
-                        state.claude?.weekQuota = QuotaStat(usedFraction: q7 / 100.0, resetAt: at)
-                    }
+                // Claude 官方配额（来自桌面端 /usage 缓存，经 Python 解出）。
+                // 桌面端原地重写缓存的瞬间可能读不到 → 用上次成功的官方值兜底，避免 5h/周剩余在
+                // “有值”与“暂无”之间闪烁；跨过各自 reset 时间则丢弃旧值（窗口已重置）。
+                let selfTokens = state.claude?.window?.tokens ?? 0    // 本次自算的 5h 窗口 token/速率
+                let selfRate = state.claude?.window?.tokensPerMin ?? 0
+
+                // 5h：usedFraction 用官方 q5；token/速率沿用自算值。无官方值则置 nil（UI 走占位，
+                // 不再用 computeWindow 的“时间流逝百分比”冒充配额）。
+                if let q5 = e?.claude?.q5 {
+                    let resetAt = e?.claude?.q5_reset.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                    let w = WindowStat(
+                        tokens: selfTokens, tokensPerMin: selfRate,
+                        resetIn: resetAt.map { max(0, $0.timeIntervalSinceNow) },
+                        resetAt: resetAt,
+                        usedFraction: min(max(q5 / 100.0, 0), 1)
+                    )
+                    lastClaudeWindow = w
+                    state.claude?.window = w
+                } else if var w = lastClaudeWindow, quotaStillValid(w.resetAt, now) {
+                    w.tokens = selfTokens
+                    w.tokensPerMin = selfRate
+                    w.resetIn = w.resetAt.map { max(0, $0.timeIntervalSinceNow) }
+                    state.claude?.window = w
+                } else {
+                    lastClaudeWindow = nil
+                    state.claude?.window = nil
+                }
+
+                // 周配额（q7）
+                if let q7 = e?.claude?.q7 {
+                    let at = e?.claude?.q7_reset.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                    let qs = QuotaStat(usedFraction: min(max(q7 / 100.0, 0), 1), resetAt: at)
+                    lastClaudeWeekQuota = qs
+                    state.claude?.weekQuota = qs
+                } else if let qs = lastClaudeWeekQuota, quotaStillValid(qs.resetAt, now) {
+                    state.claude?.weekQuota = qs
+                } else {
+                    lastClaudeWeekQuota = nil
+                    state.claude?.weekQuota = nil
+                }
+
+                // Opus 专属周配额（q7_opus，常缺；缺且无有效粘性则该行隐藏）
+                if let q7o = e?.claude?.q7_opus {
+                    let at = e?.claude?.q7_opus_reset.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                    let qs = QuotaStat(usedFraction: min(max(q7o / 100.0, 0), 1), resetAt: at)
+                    lastClaudeOpusWeekQuota = qs
+                    state.claude?.opusWeekQuota = qs
+                } else if let qs = lastClaudeOpusWeekQuota, quotaStillValid(qs.resetAt, now) {
+                    state.claude?.opusWeekQuota = qs
+                } else {
+                    lastClaudeOpusWeekQuota = nil
+                    state.claude?.opusWeekQuota = nil
                 }
                 if let q = e?.codex, let pw = q.pw {
                     let at = q.rw.map { Date(timeIntervalSince1970: TimeInterval($0)) }

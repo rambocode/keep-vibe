@@ -71,12 +71,14 @@ struct ExternalToolStat: Decodable, Sendable {
     }
 }
 
-/// Claude 配额（q5/q7 = 已用百分比，*_reset = Unix epoch 重置时间）。
+/// Claude 配额（q5/q7/q7_opus = 已用百分比，*_reset = Unix epoch 重置时间）。
 struct ExternalClaudeQuota: Decodable, Sendable {
     var q5: Double?
     var q5_reset: Int?
     var q7: Double?
     var q7_reset: Int?
+    var q7_opus: Double?       // Opus 专属周配额已用%（官方 seven_day_opus，可能缺失）
+    var q7_opus_reset: Int?
 }
 
 /// Codex 周配额（pw = 已用百分比，rw = Unix epoch 重置时间）。

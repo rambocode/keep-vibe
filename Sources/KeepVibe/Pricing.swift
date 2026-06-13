@@ -2,11 +2,12 @@ import Foundation
 
 // 每百万 token 价格
 enum Pricing {
-    /// Claude：根据 model 名包含 opus/sonnet/haiku 选择费率
-    /// - opus:   input $15/M, output $75/M, cacheWrite $18.75/M, cacheRead $1.5/M
-    /// - sonnet: input $3/M,  output $15/M, cacheWrite $3.75/M,  cacheRead $0.30/M
-    /// - haiku:  input $0.80/M, output $4/M, cacheWrite $1.00/M, cacheRead $0.08/M
+    /// Claude：根据 model 名包含 opus/sonnet/haiku 选择费率（每百万 token，官方价）
+    /// - opus:   input $5/M,  output $25/M, cacheWrite $6.25/M, cacheRead $0.50/M
+    /// - sonnet: input $3/M,  output $15/M, cacheWrite $3.75/M, cacheRead $0.30/M
+    /// - haiku:  input $1/M,  output $5/M,  cacheWrite $1.25/M, cacheRead $0.10/M
     /// cacheWrite 对应 cache_creation_input_tokens，cacheRead 对应 cache_read_input_tokens
+    /// 规则：cacheWrite = 1.25×input，cacheRead = 0.1×input。与 usage.py:_DEFAULT_PRICES 一致。
     static func claudeCost(model: String, input: Int, output: Int, cacheWrite: Int, cacheRead: Int) -> Double {
         let m = model.lowercased()
 
@@ -16,15 +17,15 @@ enum Pricing {
         let cacheReadRate: Double
 
         if m.contains("opus") {
-            inRate = 15.0
-            outRate = 75.0
-            cacheWriteRate = 18.75
-            cacheReadRate = 1.5
+            inRate = 5.0
+            outRate = 25.0
+            cacheWriteRate = 6.25
+            cacheReadRate = 0.5
         } else if m.contains("haiku") {
-            inRate = 0.80
-            outRate = 4.0
-            cacheWriteRate = 1.00
-            cacheReadRate = 0.08
+            inRate = 1.0
+            outRate = 5.0
+            cacheWriteRate = 1.25
+            cacheReadRate = 0.10
         } else {
             // 默认按 sonnet（含 "sonnet" 或无法识别的 model）
             inRate = 3.0

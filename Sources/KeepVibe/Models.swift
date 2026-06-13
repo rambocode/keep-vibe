@@ -77,6 +77,7 @@ struct AgentUsage {
     var yearBreakdown:  TokenBreakdown = .init()
     var window: WindowStat? = nil
     var weekQuota: QuotaStat? = nil
+    var opusWeekQuota: QuotaStat? = nil   // Opus 专属周配额（官方 seven_day_opus，可能为空）
     var activeSessions: Int = 0
     var costIsApprox: Bool = false
 

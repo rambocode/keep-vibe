@@ -1249,50 +1249,85 @@ def _scan_claude_plan_raw():
     try:
         with open(tmp, "wb") as fh:
             fh.write(data[i:])
-        raw = subprocess.run(["zstd", "-dc", tmp], capture_output=True).stdout
+        proc = subprocess.run(["zstd", "-dc", tmp], capture_output=True)
     finally:
         try:
             os.remove(tmp)
         except OSError:
             pass
+    # 半写文件(桌面端原地重写瞬间)解压得到空输出 → 交回退兜底。
+    # 注意:zstd 对压缩体尾部的 HTTP 缓存元数据会报 trailing-data 并返回非零码,
+    # 但已解压的 JSON 仍在 stdout,故以"能否解析出 JSON"为准,不以 returncode 为准。
+    raw = proc.stdout
+    if not raw:
+        return None
     try:
         j = json.loads(raw)
     except Exception:
-        return None
+        try:                                       # 容忍尾部噪声:截取首个 { 到末个 }
+            j = json.loads(raw[raw.find(b"{"):raw.rfind(b"}") + 1])
+        except Exception:
+            return None
     fh_ = j.get("five_hour") or {}
     sd = j.get("seven_day") or {}
+    so = j.get("seven_day_opus") or {}      # Opus 专属周配额（Max 套餐单独计，可能为 null）
     return {
         "q5": fh_.get("utilization"),
         "q5_reset": _iso_to_epoch(fh_.get("resets_at")),
         "q7": sd.get("utilization"),
         "q7_reset": _iso_to_epoch(sd.get("resets_at")),
+        "q7_opus": so.get("utilization"),
+        "q7_opus_reset": _iso_to_epoch(so.get("resets_at")),
     }
 
 
 # Claude 额度只存在 Claude Desktop 的易失缓存条目里,缓存被淘汰/重写的瞬间会读不到。
-# 成功时落盘一份,失败时回退到最近一次有效值(30 分钟内,避免跨 reset 显示陈旧)。
-_QUOTA_FALLBACK_TTL = 1800
+# 本次取到的字段优先;缺失字段用回退缓存按各自 reset 时间逐项补齐(reset 已过则丢弃,避免跨 reset 陈旧)。
+_QUOTA_FALLBACK_TTL = 21600   # 6h:桌面端长时间未刷新时仍能兜底,真正陈旧由 *_reset 拦截
 
 def scan_claude_plan():
     import tempfile
     import time
     cache = os.path.join(tempfile.gettempdir(), "_tokei_claude_quota.json")
-    r = _scan_claude_plan_raw()
-    if r and r.get("q5") is not None:
-        try:
-            with open(cache, "w") as fh:
-                json.dump({"t": time.time(), "v": r}, fh)
-        except OSError:
-            pass
-        return r
+    now = time.time()
+    raw = _scan_claude_plan_raw() or {}
+    got_live = raw.get("q5") is not None or raw.get("q7") is not None
+
+    fb = None
     try:
         with open(cache) as fh:
             c = json.load(fh)
-        if time.time() - c["t"] < _QUOTA_FALLBACK_TTL:
-            return c["v"]
+        if now - c["t"] < _QUOTA_FALLBACK_TTL:
+            fb = c["v"]
     except Exception:
-        pass
-    return r
+        fb = None
+
+    r = dict(raw)
+
+    def _merge(field, reset_field):
+        # 本次缺失该字段时,用未过期的回退值补齐
+        if r.get(field) is not None or not fb:
+            return
+        fbr = fb.get(reset_field)
+        if fbr is not None and fbr <= now:   # 窗口已重置,旧值无意义
+            return
+        if fb.get(field) is not None:
+            r[field] = fb.get(field)
+            r[reset_field] = fbr
+
+    _merge("q5", "q5_reset")
+    _merge("q7", "q7_reset")
+    _merge("q7_opus", "q7_opus_reset")
+
+    # 仅当本次取到实时值才落盘(避免回退值被反复续命刷新 TTL)
+    if got_live:
+        try:
+            with open(cache, "w") as fh:
+                json.dump({"t": now, "v": r}, fh)
+        except OSError:
+            pass
+
+    return r or None
 
 
 def compute():
@@ -1413,6 +1448,7 @@ def compute():
             "session_name": cur["name"], "session_total": cur_total,
             "q5": plan.get("q5"), "q5_reset": plan.get("q5_reset"),
             "q7": plan.get("q7"), "q7_reset": plan.get("q7_reset"),
+            "q7_opus": plan.get("q7_opus"), "q7_opus_reset": plan.get("q7_opus_reset"),
         },
         "codex": {
             "ranges": xranges,

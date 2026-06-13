@@ -3,3 +3,5 @@
 dist/
 tasks/
 .claude/workflows/
+__pycache__/
+*.pyc
